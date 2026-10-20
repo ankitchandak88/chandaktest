@@ -186,12 +186,56 @@ responsive/mobile-width layout pass, no accessibility pass (docs/05 section
 1.3MB, main bundle is ~690KB - fine for now, listed in build output as a
 warning). FE-0xx test suite (Playwright or similar) not started.
 
+## Phase 8 — Mobile app (`chandaktext_mob/`, Flutter): first pass DONE
+
+Flutter 3.35.4 project created with `--org com.chandaktext`. Same API
+approach as web (Dio + bearer token + X-Organization-Id header, see
+`lib/api/api_client.dart`). Screens: Login, Register, Projects (list +
+create + usage), Project detail (tabbed Documents/Excerpts/Notes + export),
+PDF reader (`syncfusion_flutter_pdfviewer`, text selection → save excerpt).
+`flutter analyze` clean, `flutter test` passes (1 widget smoke test).
+
+Deliberately **list-based, not the drag canvas** the web app has — matches
+docs/07 section 7.2's "Advanced canvas gestures... can be staged after the
+first release". Mobile excerpt creation stores a full-page placeholder
+`source_rects` entry rather than a DOM-selection-derived precise rect
+(Syncfusion's free-tier selection API gives selected text + page number,
+not per-character bounding rects the way a browser `Range` does) - a
+documented simplification, not a crash/bug.
+
+**Real bug found while wiring this up**: `file_picker` v11 removed the
+`FilePicker.platform` static accessor used in older versions/tutorials —
+it's `FilePicker.pickFiles(...)` directly now (an `abstract final class`
+with static methods, no singleton instance). Fixed in
+`project_detail_screen.dart`.
+
+**Not yet done / untested**:
+- **Never run on a real Android emulator or iOS simulator** — only
+  `flutter analyze`/`flutter test` (both clean) plus `flutter run -d
+  chrome`, which got as far as rendering the Login and Register screens
+  correctly (dark theme + cyan accent matching the web app) but then
+  **hung indefinitely** on the register network call with zero network
+  request ever leaving the page and zero console error - almost certainly
+  a `flutter_secure_storage`-on-web quirk (the Dio request interceptor
+  awaits a secure-storage read before every request), not an Android/iOS
+  bug, since Chrome-the-browser is not a real target platform for this
+  app anyway. **Before trusting this app works, it needs an actual spin on
+  an Android emulator/device** (`flutter run -d <android-device>`, after
+  `flutter doctor --android-licenses`) where flutter_secure_storage's real
+  (non-web) implementation is used.
+- Annotations (highlight/comment) UI, offline caching, account/billing
+  screens, push notifications, accessibility pass, device test matrix
+  (docs/07 section 7.5) - none of these started.
+- Store submission prep (Phase 9: signed AAB, iOS archive, store listing
+  assets, privacy policy, account deletion flow, billing-policy review) -
+  not started; sensible to defer until Phase 8 is actually device-tested.
+
 ## Not started yet
 - Non-API Phase 7 items: OpenAPI spec generation (docs/04 section 4.7),
   observability/monitoring, backup/restore drill, deployment checklist
   (docs/09), mobile tests, smoke-test checklist automation.
-- **Mobile app** (`chandaktext_mob/` — Flutter): not started. Folder name
-  confirmed by user: `chandaktext_mob`, sibling of `backend/` and `web/`.
+- Phase 9 — Store submission prep (see Phase 8 note above for why it's
+  blocked on real-device testing first).
 
 ## Known simplifications (intentional, documented, revisit if asked)
 - Export is a compiled "notes + excerpts" PDF, not a highlight overlay
