@@ -14,7 +14,7 @@ return new class extends Migration
             $table->foreignUuid('plan_id')->constrained()->restrictOnDelete();
             $table->string('provider')->default('fake');
             $table->string('provider_subscription_id')->nullable();
-            $table->enum('status', ['trialing', 'active', 'past_due', 'canceled', 'expired'])->default('active');
+            $table->enum('status', ['pending', 'trialing', 'active', 'past_due', 'canceled', 'expired'])->default('pending');
             $table->timestamp('current_period_end')->nullable();
             $table->boolean('cancel_at_period_end')->default(false);
             $table->timestamps();

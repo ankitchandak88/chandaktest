@@ -35,4 +35,16 @@ return [
         ],
     ],
 
+    'payment_provider' => env('PAYMENT_PROVIDER', 'fake'),
+
+    'fake_payments' => [
+        'webhook_secret' => env('FAKE_PAYMENTS_WEBHOOK_SECRET', 'fake-webhook-secret'),
+    ],
+
+    'razorpay' => [
+        'key' => env('RAZORPAY_KEY_ID'),
+        'secret' => env('RAZORPAY_KEY_SECRET'),
+        'webhook_secret' => env('RAZORPAY_WEBHOOK_SECRET'),
+    ],
+
 ];

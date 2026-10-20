@@ -12,6 +12,7 @@
         "laravel/sanctum": "^4.3",
         "laravel/scout": "^11.9",
         "laravel/tinker": "^2.10.1",
+        "predis/predis": "^3.7",
         "razorpay/razorpay": "^2.9",
         "setasign/fpdf": "^1.9",
         "setasign/fpdi": "^2.6",
@@ -25,6 +26,8 @@
         "laravel/sail": "^1.41",
         "mockery/mockery": "^1.6",
         "nunomaduro/collision": "^8.6",
+        "pestphp/pest": "^3.8",
+        "pestphp/pest-plugin-laravel": "^3.2",
         "phpunit/phpunit": "^11.5.50"
     },
     "autoload": {
