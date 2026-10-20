@@ -1,0 +1,38 @@
+# Backend (Laravel)
+backend/vendor/
+backend/node_modules/
+backend/.env
+backend/storage/*.key
+backend/storage/app/*
+!backend/storage/app/.gitignore
+backend/storage/framework/cache/*
+backend/storage/framework/sessions/*
+backend/storage/framework/testing/*
+backend/storage/framework/views/*
+backend/storage/logs/*
+backend/public/storage
+backend/bootstrap/cache/*.php
+backend/.phpunit.result.cache
+backend/database/database.sqlite
+
+# Web (React)
+web/node_modules/
+web/dist/
+web/.env
+
+# Flutter mobile
+chandaktext_mob/build/
+chandaktext_mob/.dart_tool/
+chandaktext_mob/.flutter-plugins
+chandaktext_mob/.flutter-plugins-dependencies
+chandaktext_mob/.packages
+chandaktext_mob/android/.gradle/
+chandaktext_mob/android/local.properties
+chandaktext_mob/ios/Pods/
+chandaktext_mob/ios/.symlinks/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
