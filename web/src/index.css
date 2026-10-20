@@ -1,0 +1,54 @@
+@import 'tailwindcss';
+
+/*
+ * Design direction (docs/05-frontend-ui-ux.md section 5.1): premium,
+ * editorial, minimal, document-first. Dark slate shell by default with a
+ * cyan accent for active tools/selected states; a light workspace theme is
+ * offered as a toggle (see src/stores/theme.ts).
+ */
+@theme {
+  --color-accent: #22d3ee;
+  --color-accent-foreground: #042f2e;
+}
+
+:root {
+  color-scheme: dark;
+}
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  @apply bg-slate-950 text-slate-200;
+}
+
+:root[data-theme='light'] body {
+  @apply bg-slate-50 text-slate-900;
+}
+
+/* Keyboard focus must stay visible everywhere (docs/05 section 5.5/5.6). */
+:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

@@ -13,18 +13,18 @@ test('a user cannot access another tenants project', function () {
         'created_by' => $orgB->memberships()->first()->user_id,
     ]);
 
-    test()->getJson("/api/v1/projects/{$project->id}", $headersA)->assertStatus(403);
+    apiGet("/api/v1/projects/{$project->id}", $headersA)->assertStatus(403);
 });
 
 test('a user can create and view their own project', function () {
     ['headers' => $headers] = registerUser();
 
-    $create = test()->postJson('/api/v1/projects', ['name' => 'Research One'], $headers);
+    $create = apiPost('/api/v1/projects', ['name' => 'Research One'], $headers);
     $create->assertCreated();
 
     $projectId = $create->json('data.id');
 
-    test()->getJson("/api/v1/projects/{$projectId}", $headers)
+    apiGet("/api/v1/projects/{$projectId}", $headers)
         ->assertOk()
         ->assertJsonPath('data.name', 'Research One');
 });
@@ -35,9 +35,9 @@ test('creating a project beyond the plan limit is rejected and quota stays corre
 
     Plan::where('code', 'free')->update(['limits' => ['projects' => 1, 'storage_mb' => 500, 'documents_per_project' => 10]]);
 
-    test()->postJson('/api/v1/projects', ['name' => 'First'], $headers)->assertCreated();
+    apiPost('/api/v1/projects', ['name' => 'First'], $headers)->assertCreated();
 
-    $second = test()->postJson('/api/v1/projects', ['name' => 'Second'], $headers);
+    $second = apiPost('/api/v1/projects', ['name' => 'Second'], $headers);
     $second->assertStatus(402);
 
     expect($organization->fresh()->projects()->count())->toBe(1);

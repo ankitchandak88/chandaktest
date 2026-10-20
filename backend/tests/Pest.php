@@ -1,8 +1,11 @@
 <?php
 
+use App\Models\Document;
 use App\Models\Organization;
+use App\Models\Project;
 use App\Models\User;
 use Illuminate\Foundation\Testing\RefreshDatabase;
+use Illuminate\Testing\TestResponse;
 
 /*
 |--------------------------------------------------------------------------
@@ -34,7 +37,7 @@ expect()->extend('toBeOne', function () {
 | Functions
 |--------------------------------------------------------------------------
 |
-| Shared helpers for exercising the multi-tenant API: `actingAsNewUser()`
+| Shared helpers for exercising the multi-tenant API: `registerUser()`
 | registers a user (which also creates their personal organization, exactly
 | like the real /auth/register endpoint) and returns both plus a ready-to-use
 | header array, so every Feature test authenticates the same real way
@@ -49,7 +52,7 @@ function registerUser(?string $email = null): array
 {
     $email ??= 'user-'.uniqid().'@example.test';
 
-    $response = test()->postJson('/api/v1/auth/register', [
+    $response = apiPost('/api/v1/auth/register', [
         'name' => 'Test User',
         'email' => $email,
         'password' => 'Password123!',
@@ -69,6 +72,56 @@ function registerUser(?string $email = null): array
             'X-Organization-Id' => $organizationId,
         ],
     ];
+}
+
+/*
+|--------------------------------------------------------------------------
+| API request wrappers (IMPORTANT - always use these, never
+| test()->postJson() etc directly)
+|--------------------------------------------------------------------------
+|
+| Laravel's Sanctum guard (Illuminate\Auth\RequestGuard under the hood)
+| memoizes the resolved user on the guard INSTANCE after the first
+| authentication, and that instance is reused for every simulated HTTP call
+| within one test method (the container isn't rebuilt between
+| test()->postJson() calls the way it would be between separate real HTTP
+| requests in production). Concretely: if a test authenticates as user A
+| and then makes a second call with user B's bearer token, Auth::user()
+| silently keeps returning A - a well known Sanctum+testing gotcha. Calling
+| auth()->forgetGuards() before every request clears that cache so each
+| call re-resolves the user from whatever token is actually in its headers.
+| This bit for real in this project (see docs/PROGRESS.md "fixed bugs"):
+| a "viewer can't edit" test and a "cross-tenant search" test both silently
+| passed/failed for the wrong reason until these wrappers were introduced.
+|
+*/
+
+function apiGet(string $uri, array $headers = []): TestResponse
+{
+    auth()->forgetGuards();
+
+    return test()->getJson($uri, $headers);
+}
+
+function apiPost(string $uri, array $data = [], array $headers = []): TestResponse
+{
+    auth()->forgetGuards();
+
+    return test()->postJson($uri, $data, $headers);
+}
+
+function apiPatch(string $uri, array $data = [], array $headers = []): TestResponse
+{
+    auth()->forgetGuards();
+
+    return test()->patchJson($uri, $data, $headers);
+}
+
+function apiDelete(string $uri, array $data = [], array $headers = []): TestResponse
+{
+    auth()->forgetGuards();
+
+    return test()->deleteJson($uri, $data, $headers);
 }
 
 function minimalPdfBytes(): string
@@ -101,4 +154,23 @@ function minimalPdfBytes(): string
     $out .= 'trailer<< /Size '.(count($objs) + 1).' /Root 1 0 R >>'."\n".'startxref'."\n".$xrefOffset."\n%%EOF";
 
     return $out;
+}
+
+/**
+ * A document that's already past processing (status=ready), for tests that
+ * only care about annotations/excerpts/search and don't need to exercise
+ * the upload+pdfparser pipeline itself.
+ */
+function createReadyDocument(Project $project, int $uploaderId): Document
+{
+    return Document::factory()->create([
+        'organization_id' => $project->organization_id,
+        'project_id' => $project->id,
+        'uploaded_by' => $uploaderId,
+    ]);
+}
+
+function fakeWebhookHeaders(): array
+{
+    return ['X-Fake-Webhook-Secret' => config('services.fake_payments.webhook_secret')];
 }

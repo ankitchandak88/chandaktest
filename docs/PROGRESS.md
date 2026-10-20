@@ -80,37 +80,60 @@ Super admin login for `/admin`: `admin@chandaktext.test` / `password`
       read-only), AuditLogs (read-only), FeatureFlags. `AdminOverviewWidget`
       dashboard stats. Super-admin gate via `User::canAccessPanel()`.
 
-## Right now / IN PROGRESS
+## Phase 7 — Quality (testing): DONE for the backend API
 
-**Phase 7 — Quality**: setting up Pest (installed, `tests/Pest.php` +
-`tests/TestCase.php` configured to migrate+seed `chandaktext_test` per test
-via `RefreshDatabase`). `tests/Feature/Api/AuthTest.php` and
-`ProjectTenancyTest.php` written (8/9 passing).
+Pest installed and wired to `chandaktext_test` (MySQL). **30/30 tests
+passing** across: `AuthTest`, `ProjectTenancyTest`, `DocumentUploadTest`,
+`AnnotationExcerptTest`, `WorkspaceLinkTest`, `SearchExportTest`,
+`BillingTest`, `AdminSuspensionTest`, `Feature/Admin/FilamentPanelTest` —
+covers BE-001 through BE-020 from docs/08.
 
-**Open bug to fix next**: `AuthTest > a suspended user cannot log in` fails —
-expects 422, got 200. The suspended check in
-`AuthController::login()` (`app/Http/Controllers/Api/V1/AuthController.php`)
-looks correct by inspection; root cause not yet found. Was mid-investigation
-(checking whether `$user->update(['status' => 'suspended'])` in the test
-actually persists before the HTTP sub-request reads it — a tinker check
-against `chandaktext_test` showed 0 users, which needs explaining: either the
-tinker connection didn't point at the test DB correctly, or there's a dirty
-read issue). **Next step**: add a temporary `dd($user->fresh()->status)`
-right before the `isSuspended()` check, or dump the actual JSON body in the
-test (`dump($response->json())`) instead of only asserting status, to see
-the real failure reason before touching any logic.
+**Two real bugs found and fixed while writing these tests** (both were
+present in the actual app code, not just test mistakes):
+1. `User` model's `$fillable` was missing `status`/`suspended_reason`/
+   `suspended_at`/`is_super_admin` — so `->update(['status' => 'suspended'])`
+   silently did nothing (mass-assignment protection), both in
+   `AuthController` and in the Filament `UserResource` suspend action. Fixed
+   by adding those fields to `$fillable`.
+2. None in app code, but a **test-infrastructure gotcha worth remembering**:
+   Sanctum's guard (`Illuminate\Auth\RequestGuard`) memoizes the resolved
+   user on first authentication within a test, so a second simulated HTTP
+   call using a *different* user's bearer token in the same test method
+   silently keeps authenticating as the first user. Fixed by routing every
+   test HTTP call through `apiGet/apiPost/apiPatch/apiDelete` wrapper
+   functions in `tests/Pest.php`, which call `auth()->forgetGuards()` before
+   every request. **Always use these wrappers in new tests, never
+   `test()->getJson()` etc directly, whenever a test might authenticate as
+   more than one user.**
+
+**Known test-infra limitation (not an app bug)**: InnoDB only merges
+FULLTEXT index changes into the searchable index at transaction COMMIT.
+`RefreshDatabase` wraps every test in an uncommitted transaction, so a
+freshly-inserted `document_pages`/`excerpts`/`notes` row is *never* visible
+to `MATCH AGAINST` inside a test, regardless of row count. `SearchExportTest`
+therefore only asserts on authorization (403 cross-tenant / 200 same-tenant),
+not on the search actually finding the text — the real matching behavior was
+separately confirmed working via curl against a real running server earlier
+in this project.
 
 ## Not started yet
-- Remaining Pest coverage for BE-006 through BE-020 (upload validation,
-  annotation ownership, link-to-nonexistent-object, search isolation,
-  duplicate/invalid webhook signature — webhook ones are already manually
-  curl-verified but need a real automated test), FE-0xx, mobile tests,
-  smoke-test checklist automation.
-- OpenAPI spec generation (docs/04 section 4.7).
-- Observability/monitoring, backup/restore drill, deployment checklist
-  (docs/09) — all deferred to near the end, per the roadmap.
-- **Web frontend** (`web/` — React+TS+Vite+Tailwind+shadcn+PDF.js+canvas
-  library): not started.
+- Non-API Phase 7 items: OpenAPI spec generation (docs/04 section 4.7),
+  observability/monitoring, backup/restore drill, deployment checklist
+  (docs/09), FE-0xx tests (need the web app to exist first), mobile tests,
+  smoke-test checklist automation. These can wait until web/mobile exist.
+- **Web frontend** (`web/` — React 19 + TS + Vite + Tailwind v4): scaffolded
+  and in progress. Done so far: Vite+React+TS+Tailwind v4 project created,
+  deps installed (react-router-dom, @tanstack/react-query, axios, zustand,
+  react-hook-form+zod, pdfjs-dist, clsx/tailwind-merge/lucide-react).
+  `src/lib/api.ts` (axios client with auto bearer token + X-Organization-Id
+  header injection + 401-logout interceptor), `src/stores/auth.ts` (zustand,
+  persisted to localStorage), `src/types/api.ts` (all API response shapes),
+  `src/lib/pdf.ts` (pdfjs-dist worker setup), `src/components/ui.tsx`
+  (Button/Input/Card/Label/FieldError/EmptyState/Spinner primitives),
+  `src/pages/LoginPage.tsx` + `RegisterPage.tsx` done. **Next**: router setup
+  in `App.tsx`/`main.tsx`, Dashboard (project list+create+usage), then the
+  project workspace page (document upload, PDF.js viewer with text
+  selection → excerpt, notes, canvas, export trigger).
 - **Mobile app** (`chandaktext_mob/` — Flutter): not started. Folder name
   confirmed by user: `chandaktext_mob`, sibling of `backend/` and `web/`.
 
