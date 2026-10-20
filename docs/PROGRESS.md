@@ -88,10 +88,11 @@ Super admin login for `/admin`: `admin@chandaktext.test` / `password`
 
 ## Phase 7 — Quality (testing): DONE for the backend API
 
-Pest installed and wired to `chandaktext_test` (MySQL). **30/30 tests
+Pest installed and wired to `chandaktext_test` (MySQL). **34/34 tests
 passing** across: `AuthTest`, `ProjectTenancyTest`, `DocumentUploadTest`,
 `AnnotationExcerptTest`, `WorkspaceLinkTest`, `SearchExportTest`,
-`BillingTest`, `AdminSuspensionTest`, `Feature/Admin/FilamentPanelTest` —
+`BillingTest`, `AdminSuspensionTest`, `OrganizationMembersTest`,
+`Feature/Admin/FilamentPanelTest` —
 covers BE-001 through BE-020 from docs/08.
 
 **Two real bugs found and fixed while writing these tests** (both were
@@ -210,19 +211,10 @@ with static methods, no singleton instance). Fixed in
 `project_detail_screen.dart`.
 
 **Not yet done / untested**:
-- **Never run on a real Android emulator or iOS simulator** — only
-  `flutter analyze`/`flutter test` (both clean) plus `flutter run -d
-  chrome`, which got as far as rendering the Login and Register screens
-  correctly (dark theme + cyan accent matching the web app) but then
-  **hung indefinitely** on the register network call with zero network
-  request ever leaving the page and zero console error - almost certainly
-  a `flutter_secure_storage`-on-web quirk (the Dio request interceptor
-  awaits a secure-storage read before every request), not an Android/iOS
-  bug, since Chrome-the-browser is not a real target platform for this
-  app anyway. **Before trusting this app works, it needs an actual spin on
-  an Android emulator/device** (`flutter run -d <android-device>`, after
-  `flutter doctor --android-licenses`) where flutter_secure_storage's real
-  (non-web) implementation is used.
+- `flutter run -d chrome` rendered Login/Register correctly but then hung
+  on the register network call (web-only `flutter_secure_storage` quirk,
+  not an Android/iOS issue - see below, this is now IN PROGRESS on a real
+  emulator instead).
 - Annotations (highlight/comment) UI, offline caching, account/billing
   screens, push notifications, accessibility pass, device test matrix
   (docs/07 section 7.5) - none of these started.
@@ -230,10 +222,42 @@ with static methods, no singleton instance). Fixed in
   assets, privacy policy, account deletion flow, billing-policy review) -
   not started; sensible to defer until Phase 8 is actually device-tested.
 
+## PAUSED HERE — resume point (session paused on user request, token/usage limit)
+
+**In progress, not yet confirmed working**: `flutter run -d emulator-5554`
+against the `Pixel_10a` Android emulator (API 36, already created and
+launched successfully - `flutter doctor --android-licenses` needed no
+action, SDK licenses were already fine on this machine). The first Gradle
+`assembleDebug` build was **still running** (several minutes in, `java.exe`
+processes active = genuinely working, not stuck - first builds with
+syncfusion/file_picker/secure_storage native deps are slow) when the
+session was paused. **Next step on resume**: check on this build
+(`flutter devices` to confirm `emulator-5554` is still up, re-run `flutter
+run -d emulator-5554` from `chandaktext_mob/` if the process died) and
+actually click through register→login→create project→upload→PDF
+view→excerpt on the real emulator before trusting the mobile app works.
+This is the single most important unverified thing right now.
+
+Also done just before pausing (uncommitted at time of writing, check `git
+status` on resume):
+- `docs/openapi.yaml` - hand-written OpenAPI 3.0 spec, 35 paths, validated
+  as parseable YAML. Not auto-generated; keep in sync by hand.
+- Generalized the web app's link-mode UI: `WorkspaceCanvas`'s
+  `onOpenExcerpt` (excerpt-only) became `onOpenCard` (excerpt OR note), so
+  notes can now be either end of a link, not just excerpts. Rebuilt clean.
+- `backend/README.md` replaced (was the Laravel-skeleton default) with
+  actual project-specific setup/test instructions.
+- `tests/Feature/Api/OrganizationMembersTest.php` - 4 new passing tests
+  (owner adds member, adding an unregistered email is rejected, a non-owner
+  can't add members, removing the last owner is rejected with 409).
+- Full Pest suite was mid-run (one more time, to confirm nothing broke)
+  when paused - **re-run `php vendor/bin/pest` from `backend/` on resume
+  and confirm it's still all green before doing anything else.**
+
 ## Not started yet
-- Non-API Phase 7 items: OpenAPI spec generation (docs/04 section 4.7),
-  observability/monitoring, backup/restore drill, deployment checklist
-  (docs/09), mobile tests, smoke-test checklist automation.
+- Non-API Phase 7 items: observability/monitoring, backup/restore drill,
+  deployment checklist (docs/09), mobile device test matrix, smoke-test
+  checklist automation.
 - Phase 9 — Store submission prep (see Phase 8 note above for why it's
   blocked on real-device testing first).
 

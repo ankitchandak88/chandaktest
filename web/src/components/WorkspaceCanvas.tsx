@@ -16,7 +16,9 @@ interface WorkspaceCanvasProps {
   excerpts: Excerpt[]
   notes: Note[]
   links: Link[]
-  onOpenExcerpt?: (excerpt: Excerpt) => void
+  /** Fired on double-clicking any card - used to drive the link-mode flow
+   * (both excerpts and notes can be either end of a link). */
+  onOpenCard?: (card: { type: 'excerpt' | 'note'; id: string }) => void
 }
 
 /**
@@ -34,7 +36,7 @@ export default function WorkspaceCanvas({
   excerpts,
   notes,
   links,
-  onOpenExcerpt,
+  onOpenCard,
 }: WorkspaceCanvasProps) {
   const saveBatch = useSaveWorkspaceBatch(projectId)
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
@@ -163,12 +165,7 @@ export default function WorkspaceCanvas({
             className="absolute flex cursor-grab flex-col gap-1 rounded-md border border-slate-700 bg-slate-900 p-3 shadow-lg active:cursor-grabbing"
             style={{ left: pos.x, top: pos.y, width: card.item.width, minHeight: card.item.height }}
             onPointerDown={(e) => handlePointerDown(e, card.item.id)}
-            onDoubleClick={() => {
-              if (card.kind === 'excerpt') {
-                const excerpt = excerpts.find((ex) => ex.id === card.item.target_id)
-                if (excerpt) onOpenExcerpt?.(excerpt)
-              }
-            }}
+            onDoubleClick={() => onOpenCard?.({ type: card.kind, id: card.item.target_id })}
           >
             <span
               className={

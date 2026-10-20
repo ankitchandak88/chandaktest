@@ -96,18 +96,22 @@ export default function ProjectWorkspacePage() {
     form.reset()
   }
 
-  async function handleOpenExcerpt(excerpt: Excerpt) {
+  async function handleOpenCard(card: { type: 'excerpt' | 'note'; id: string }) {
     if (linkMode) {
+      // A link to itself is a no-op, not an error - just ignore the click
+      // rather than letting the API reject it.
+      if (linkMode.sourceType === card.type && linkMode.sourceId === card.id) return
+
       await createLink.mutateAsync({
         source_type: linkMode.sourceType,
         source_id: linkMode.sourceId,
-        target_type: 'excerpt',
-        target_id: excerpt.id,
+        target_type: card.type,
+        target_id: card.id,
       })
       setLinkMode(null)
       return
     }
-    setLinkMode({ sourceType: 'excerpt', sourceId: excerpt.id })
+    setLinkMode({ sourceType: card.type, sourceId: card.id })
   }
 
   async function handleStartExport() {
@@ -225,7 +229,7 @@ export default function ProjectWorkspacePage() {
               excerpts={excerpts ?? []}
               notes={notes ?? []}
               links={links ?? []}
-              onOpenExcerpt={handleOpenExcerpt}
+              onOpenCard={handleOpenCard}
             />
           </div>
           <aside className="w-72 shrink-0 border-l border-slate-800 p-4">
@@ -242,13 +246,17 @@ export default function ProjectWorkspacePage() {
               </Button>
             </form>
 
-            {linkMode && (
+            {linkMode ? (
               <p className="rounded-md bg-slate-800 p-2 text-xs text-slate-300">
-                Double-click another excerpt card to link it, or{' '}
+                Double-click another card to link it, or{' '}
                 <button className="text-accent underline" onClick={() => setLinkMode(null)}>
                   cancel
                 </button>
                 .
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500">
+                Double-click any card on the canvas to start linking it to another.
               </p>
             )}
           </aside>

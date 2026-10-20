@@ -1,0 +1,723 @@
+openapi: 3.0.3
+info:
+  title: ChandakText API
+  description: >
+    PDF research workspace API (docs/04-api-specification.md). Bearer-token
+    auth via Laravel Sanctum for both the web app and the Flutter mobile
+    app - no cookie/session auth. Every tenant-scoped endpoint requires the
+    `X-Organization-Id` header once the caller belongs to more than one
+    organization (see ResolveOrganization middleware).
+  version: "1.0"
+servers:
+  - url: http://127.0.0.1:8123/api/v1
+    description: Local development
+
+security:
+  - bearerAuth: []
+
+tags:
+  - name: Auth
+  - name: Organizations
+  - name: Projects
+  - name: Documents
+  - name: Annotations
+  - name: Excerpts
+  - name: Notes
+  - name: Workspace
+  - name: Links
+  - name: Search
+  - name: Exports
+  - name: Billing
+  - name: Usage
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      summary: Register a new user (also creates their personal organization)
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password, password_confirmation]
+              properties:
+                name: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                password_confirmation: { type: string, format: password }
+                organization_name: { type: string, nullable: true }
+      responses:
+        "201":
+          description: Account created
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: "#/components/schemas/User" }
+                      token: { type: string }
+                      organization_id: { type: string, format: uuid }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      summary: Log in and receive a bearer token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+      responses:
+        "200":
+          description: Logged in
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  data:
+                    type: object
+                    properties:
+                      user: { $ref: "#/components/schemas/User" }
+                      token: { type: string }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      summary: Revoke the current token
+      responses:
+        "200": { description: Logged out }
+
+  /auth/forgot-password:
+    post:
+      tags: [Auth]
+      summary: Request a password reset link
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email]
+              properties: { email: { type: string, format: email } }
+      responses:
+        "200": { description: Generic success (does not reveal whether the email exists) }
+
+  /auth/reset-password:
+    post:
+      tags: [Auth]
+      summary: Reset password with a token from the emailed link
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [token, email, password, password_confirmation]
+              properties:
+                token: { type: string }
+                email: { type: string, format: email }
+                password: { type: string, format: password }
+                password_confirmation: { type: string, format: password }
+      responses:
+        "200": { description: Password reset }
+        "422": { $ref: "#/components/responses/ValidationError" }
+
+  /me:
+    get:
+      tags: [Auth]
+      summary: Current user, with organization memberships
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties: { data: { $ref: "#/components/schemas/User" } }
+        "401": { $ref: "#/components/responses/Unauthenticated" }
+    patch:
+      tags: [Auth]
+      summary: Update name and/or password
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string }
+                password: { type: string, format: password }
+                password_confirmation: { type: string, format: password }
+      responses:
+        "200": { description: Updated }
+    delete:
+      tags: [Auth]
+      summary: Delete your account (blocked if sole owner of a multi-member org)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [password]
+              properties: { password: { type: string, format: password } }
+      responses:
+        "200": { description: Deleted }
+        "409": { description: Must transfer ownership first }
+
+  /organizations:
+    get:
+      tags: [Organizations]
+      summary: Organizations the current user belongs to
+      responses:
+        "200": { description: OK }
+
+  /organizations/current:
+    get:
+      tags: [Organizations]
+      summary: The active organization (per X-Organization-Id)
+      responses:
+        "200": { description: OK }
+
+  /organizations/current/members:
+    get:
+      tags: [Organizations]
+      summary: List members of the active organization
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Organizations]
+      summary: Add an existing user to the active organization
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, role]
+              properties:
+                email: { type: string, format: email }
+                role: { type: string, enum: [owner, member] }
+      responses:
+        "201": { description: Added }
+        "422": { description: No account with that email exists yet }
+
+  /projects:
+    get:
+      tags: [Projects]
+      summary: List projects in the active organization
+      parameters:
+        - { name: per_page, in: query, schema: { type: integer, default: 20 } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PaginatedProjects" }
+    post:
+      tags: [Projects]
+      summary: Create a project (enforces the plan's project quota)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string }
+                description: { type: string, nullable: true }
+      responses:
+        "201": { description: Created }
+        "402": { description: Plan quota exceeded }
+
+  /projects/{project}:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      tags: [Projects]
+      summary: Project detail
+      responses:
+        "200": { description: OK }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    patch:
+      tags: [Projects]
+      summary: Update project name/description
+      responses:
+        "200": { description: Updated }
+    delete:
+      tags: [Projects]
+      summary: Delete a project
+      responses:
+        "200": { description: Deleted }
+
+  /projects/{project}/documents:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      tags: [Documents]
+      summary: List documents in a project
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Documents]
+      summary: Upload a PDF (validated, queued for text extraction)
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file: { type: string, format: binary }
+      responses:
+        "201": { description: "Accepted - status starts as 'processing'" }
+        "402": { description: Storage or per-project document quota exceeded }
+        "422": { description: Not a valid PDF }
+
+  /documents/{document}:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+    get:
+      tags: [Documents]
+      summary: Document metadata (never page content)
+      responses:
+        "200": { description: OK }
+    delete:
+      tags: [Documents]
+      summary: Delete a document
+      responses:
+        "200": { description: Deleted }
+
+  /documents/{document}/pages/{page}:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+      - { name: page, in: path, required: true, schema: { type: integer, minimum: 1 } }
+    get:
+      tags: [Documents]
+      summary: Extracted text for one page
+      responses:
+        "200": { description: OK }
+        "404": { description: Page not found }
+
+  /documents/{document}/download:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+    get:
+      tags: [Documents]
+      summary: Stream the original PDF bytes (re-checks authorization every call)
+      responses:
+        "200":
+          description: PDF bytes
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+
+  /documents/{document}/annotations:
+    parameters:
+      - { $ref: "#/components/parameters/DocumentId" }
+    get:
+      tags: [Annotations]
+      summary: List annotations on a document
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Annotations]
+      summary: Create a highlight/underline/comment/ink annotation
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AnnotationInput" }
+      responses:
+        "201": { description: Created }
+
+  /annotations/{annotation}:
+    parameters:
+      - { name: annotation, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Annotations]
+      summary: Update an annotation (own, or project editor)
+      responses:
+        "200": { description: Updated }
+        "403": { $ref: "#/components/responses/Forbidden" }
+    delete:
+      tags: [Annotations]
+      summary: Delete an annotation
+      responses:
+        "200": { description: Deleted }
+
+  /projects/{project}/excerpts:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      tags: [Excerpts]
+      summary: List excerpts in a project
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Excerpts]
+      summary: Save a selected passage as an excerpt
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ExcerptInput" }
+      responses:
+        "201": { description: Created }
+
+  /excerpts/{excerpt}:
+    parameters:
+      - { name: excerpt, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Excerpts]
+      summary: Update excerpt text/rects
+      responses:
+        "200": { description: Updated }
+    delete:
+      tags: [Excerpts]
+      summary: Delete an excerpt
+      responses:
+        "200": { description: Deleted }
+
+  /projects/{project}/notes:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      tags: [Notes]
+      summary: List notes in a project
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Notes]
+      summary: Create a note
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, nullable: true }
+                content: { type: string, nullable: true }
+      responses:
+        "201": { description: Created }
+
+  /notes/{note}:
+    parameters:
+      - { name: note, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Notes]
+      summary: Update a note
+      responses:
+        "200": { description: Updated }
+    delete:
+      tags: [Notes]
+      summary: Delete a note
+      responses:
+        "200": { description: Deleted }
+
+  /projects/{project}/workspace-items:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      tags: [Workspace]
+      summary: List canvas item positions
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Workspace]
+      summary: Place a single excerpt/note on the canvas
+      responses:
+        "201": { description: Created }
+
+  /projects/{project}/workspace-items/batch:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      tags: [Workspace]
+      summary: Bulk upsert positions (the canvas autosave loop)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  maxItems: 200
+                  items:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid, nullable: true }
+                      item_type: { type: string, enum: [excerpt, note] }
+                      target_id: { type: string, format: uuid }
+                      x: { type: number }
+                      y: { type: number }
+                      width: { type: number }
+                      height: { type: number }
+                      z_index: { type: integer }
+      responses:
+        "200": { description: Saved }
+
+  /workspace-items/{workspaceItem}:
+    parameters:
+      - { name: workspaceItem, in: path, required: true, schema: { type: string, format: uuid } }
+    patch:
+      tags: [Workspace]
+      summary: Update one canvas item's position/size
+      responses:
+        "200": { description: Updated }
+    delete:
+      tags: [Workspace]
+      summary: Remove a canvas item
+      responses:
+        "200": { description: Deleted }
+
+  /projects/{project}/links:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    get:
+      tags: [Links]
+      summary: List links in a project
+      responses:
+        "200": { description: OK }
+    post:
+      tags: [Links]
+      summary: Link two excerpts/notes together (validated references)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [source_type, source_id, target_type, target_id]
+              properties:
+                source_type: { type: string, enum: [excerpt, note] }
+                source_id: { type: string, format: uuid }
+                target_type: { type: string, enum: [excerpt, note] }
+                target_id: { type: string, format: uuid }
+                label: { type: string, nullable: true }
+      responses:
+        "201": { description: Created }
+        "422": { description: Referenced excerpt/note does not exist in this project }
+
+  /links/{link}:
+    parameters:
+      - { name: link, in: path, required: true, schema: { type: string, format: uuid } }
+    delete:
+      tags: [Links]
+      summary: Delete a link
+      responses:
+        "200": { description: Deleted }
+
+  /search:
+    get:
+      tags: [Search]
+      summary: Full-text search across document pages, excerpts and notes in a project
+      parameters:
+        - { name: project_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2 } }
+      responses:
+        "200": { description: OK }
+        "403": { $ref: "#/components/responses/Forbidden" }
+
+  /projects/{project}/exports:
+    parameters:
+      - { $ref: "#/components/parameters/ProjectId" }
+    post:
+      tags: [Exports]
+      summary: Queue a PDF export of the project's notes and excerpts
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties: { format: { type: string, enum: [pdf, docx], default: pdf } }
+      responses:
+        "202": { description: Queued }
+
+  /exports/{export}:
+    parameters:
+      - { name: export, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Exports]
+      summary: Export job status
+      responses:
+        "200": { description: OK }
+
+  /exports/{export}/download:
+    parameters:
+      - { name: export, in: path, required: true, schema: { type: string, format: uuid } }
+    get:
+      tags: [Exports]
+      summary: Download the ready export (expires after EXPORT_LINK_TTL_MINUTES)
+      responses:
+        "200":
+          description: PDF bytes
+          content:
+            application/pdf: { schema: { type: string, format: binary } }
+        "409": { description: Not ready yet }
+        "410": { description: Link expired }
+
+  /billing/plans:
+    get:
+      tags: [Billing]
+      summary: List active plans
+      security: []
+      responses:
+        "200": { description: OK }
+
+  /billing/checkout:
+    post:
+      tags: [Billing]
+      summary: Start checkout for a plan (does not grant entitlements until the webhook confirms)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [plan_code]
+              properties: { plan_code: { type: string } }
+      responses:
+        "200": { description: Returns a checkout_url and the pending subscription_id }
+
+  /billing/subscription:
+    get:
+      tags: [Billing]
+      summary: Current subscription for the active organization
+      responses:
+        "200": { description: OK }
+
+  /billing/webhooks/{provider}:
+    parameters:
+      - { name: provider, in: path, required: true, schema: { type: string, enum: [fake, razorpay] } }
+    post:
+      tags: [Billing]
+      summary: Provider payment webhook (signature-verified, idempotent)
+      security: []
+      responses:
+        "200": { description: Processed (or already processed - safe to retry) }
+        "400": { description: Invalid signature }
+
+  /usage:
+    get:
+      tags: [Usage]
+      summary: Current plan and usage for the active organization
+      responses:
+        "200": { description: OK }
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Laravel Sanctum personal access token
+
+  parameters:
+    ProjectId:
+      name: project
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    DocumentId:
+      name: document
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+
+  responses:
+    Unauthenticated:
+      description: Missing or invalid bearer token
+    Forbidden:
+      description: Authenticated but not authorized for this resource (e.g. a different tenant's project)
+    ValidationError:
+      description: Validation failed
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              message: { type: string }
+              errors:
+                type: object
+                additionalProperties: { type: array, items: { type: string } }
+              request_id: { type: string }
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id: { type: integer }
+        name: { type: string }
+        email: { type: string, format: email }
+        email_verified_at: { type: string, format: date-time, nullable: true }
+
+    SourceRect:
+      type: object
+      description: Normalized (0-1) page-space rectangle - see docs/03 section 3.3
+      properties:
+        x: { type: number }
+        y: { type: number }
+        width: { type: number }
+        height: { type: number }
+
+    ExcerptInput:
+      type: object
+      required: [document_id, page_number, text, source_rects]
+      properties:
+        document_id: { type: string, format: uuid }
+        page_number: { type: integer, minimum: 1 }
+        text: { type: string }
+        source_rects:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/SourceRect" }
+
+    AnnotationInput:
+      type: object
+      required: [page_number, type, payload]
+      properties:
+        page_number: { type: integer, minimum: 1 }
+        type: { type: string, enum: [highlight, underline, comment, ink] }
+        color: { type: string, nullable: true }
+        comment_text: { type: string, nullable: true }
+        payload: { type: object }
+
+    Project:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        organization_id: { type: string, format: uuid }
+        name: { type: string }
+        description: { type: string, nullable: true }
+        documents_count: { type: integer }
+        notes_count: { type: integer }
+        excerpts_count: { type: integer }
+
+    PaginatedProjects:
+      type: object
+      properties:
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Project" }
+        links: { type: object }
+        meta: { type: object }
