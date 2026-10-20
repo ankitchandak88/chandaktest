@@ -1,4 +1,4 @@
-import { type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
+import { type ButtonHTMLAttributes, type HTMLAttributes, type InputHTMLAttributes, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 
 export function Button({
@@ -34,9 +34,9 @@ export function Input({ className, ...props }: InputHTMLAttributes<HTMLInputElem
   )
 }
 
-export function Card({ className, children }: { className?: string; children: ReactNode }) {
+export function Card({ className, children, ...props }: HTMLAttributes<HTMLDivElement>) {
   return (
-    <div className={clsx('rounded-lg border border-slate-800 bg-slate-900/60 p-6', className)}>
+    <div className={clsx('rounded-lg border border-slate-800 bg-slate-900/60 p-6', className)} {...props}>
       {children}
     </div>
   )

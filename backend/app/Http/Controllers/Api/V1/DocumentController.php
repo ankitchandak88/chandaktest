@@ -25,9 +25,10 @@ class DocumentController extends Controller
     {
         $this->authorize('view', $project);
 
-        return response()->json([
-            'data' => $project->documents()->orderByDesc('created_at')->paginate(20),
-        ]);
+        // Not wrapped in an extra 'data' key - a paginator already
+        // serializes as {data, links, meta}, matching ProjectController's
+        // index() so every paginated list endpoint has the same shape.
+        return response()->json($project->documents()->orderByDesc('created_at')->paginate(20));
     }
 
     /**

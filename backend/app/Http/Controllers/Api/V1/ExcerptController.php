@@ -14,7 +14,8 @@ class ExcerptController extends Controller
     {
         $this->authorize('view', $project);
 
-        return response()->json(['data' => $project->excerpts()->orderByDesc('created_at')->paginate(30)]);
+        // See DocumentController::index() - not double-wrapped.
+        return response()->json($project->excerpts()->orderByDesc('created_at')->paginate(30));
     }
 
     public function store(Request $request, Project $project)

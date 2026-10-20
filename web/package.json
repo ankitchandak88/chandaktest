@@ -11,12 +11,15 @@
   },
   "dependencies": {
     "@hookform/resolvers": "^6.0.0",
+    "@tanstack/react-query": "^5.104.5",
+    "axios": "^1.20.0",
     "clsx": "^2.1.1",
     "lucide-react": "^1.60.0",
-    "pdfjs-dist": "^6.4.299",
+    "pdfjs-dist": "^4.8.69",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-hook-form": "^7.90.0",
+    "react-router-dom": "^7.18.4",
     "tailwind-merge": "^3.7.0",
     "zod": "^4.6.7",
     "zustand": "^5.0.15"

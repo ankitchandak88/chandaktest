@@ -3,8 +3,8 @@
 /*
  * Design direction (docs/05-frontend-ui-ux.md section 5.1): premium,
  * editorial, minimal, document-first. Dark slate shell by default with a
- * cyan accent for active tools/selected states; a light workspace theme is
- * offered as a toggle (see src/stores/theme.ts).
+ * cyan accent for active tools/selected states. A light workspace theme
+ * (toggled via a `data-theme="light"` attribute on <html>) is a follow-up.
  */
 @theme {
   --color-accent: #22d3ee;
@@ -17,6 +17,34 @@
 
 :root[data-theme='light'] {
   color-scheme: light;
+}
+
+/*
+ * PDF.js text layer (docs/05 section 5.5 "preserve text selection"): spans
+ * are positioned absolutely by PDF.js to exactly overlay the rendered
+ * canvas glyphs, kept invisible so only the canvas rendering shows, while
+ * staying natively selectable by the browser.
+ */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  line-height: 1;
+  text-align: initial;
+  transform-origin: 0 0;
+}
+
+.textLayer span,
+.textLayer br {
+  color: transparent;
+  position: absolute;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0% 0%;
+}
+
+.textLayer ::selection {
+  background: rgba(34, 211, 238, 0.35);
 }
 
 html,

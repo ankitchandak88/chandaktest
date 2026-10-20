@@ -14,9 +14,15 @@ Update it after every phase / every meaningful breakpoint.
   bearer tokens** for both web and mobile (no cookie/session auth at all —
   user explicitly asked for "API based").
 - Admin: Filament 3 at `backend/`, mounted at `/admin` in the same Laravel app.
-- Web: React + TS + Vite + Tailwind at `web/` — **not started yet**.
+- Web: React 19 + TS + Vite + Tailwind v4 at `web/` — **core user journey
+  working end-to-end in a real browser**, see Phase 7.5 below.
 - Mobile: Flutter at `chandaktext_mob/` (Flutter 3.35.4 at `C:\dev\flutter`) —
   **not started yet**.
+- pdfjs-dist is pinned to **`^4.8.69`**, not the newest 6.x. 6.x depends on
+  very recent platform APIs (`URL.parse()` static method, `Promise.try()`)
+  that not every Chromium build has yet - it broke entirely in the browser
+  automation tool used to test this. 4.8.69 works everywhere tested. Don't
+  casually bump this major version without re-testing the PDF viewer.
 - Payment: `PAYMENT_PROVIDER=fake` by default (app/Services/Billing/FakePaymentProvider).
   Real `RazorpayPaymentProvider` is wired and ready but untested (no live keys).
 - IDs: every domain table uses a UUID primary key (`HasUuids` trait). `users.id`
@@ -116,24 +122,74 @@ not on the search actually finding the text — the real matching behavior was
 separately confirmed working via curl against a real running server earlier
 in this project.
 
+## Phase 7.5 — Web frontend: core journey DONE, verified in a real browser
+
+`web/` is React 19 + TS + Vite + Tailwind v4, API-only against the Laravel
+backend (bearer token in `Authorization` + `X-Organization-Id` header, via
+an axios client in `src/lib/api.ts`). Everything below was clicked through
+in an actual Chrome tab (not just unit-tested) via the browser automation
+tool, including a real uploaded PDF (not just the hand-built test fixture):
+**register → create project → upload PDF → open PDF.js viewer → select text
+→ save as excerpt → add a note → drag canvas cards → positions persist
+across reload → export → download-ready PDF link appears.** This is the
+single most important milestone so far - the whole spec's "core user
+journey" (docs/01 section 1.7) now works front-to-back.
+
+Files: `src/lib/api.ts` (axios + interceptors), `src/lib/queries.ts` (every
+React Query hook for projects/documents/excerpts/notes/workspace-items/
+links/exports/usage), `src/lib/pdf.ts` (pdfjs-dist worker setup),
+`src/stores/auth.ts` (zustand, persisted), `src/types/api.ts`,
+`src/components/ui.tsx` (Button/Input/Card/etc), `src/components/
+{AppShell,ProtectedRoute,PdfViewer,WorkspaceCanvas}.tsx`, `src/pages/
+{LoginPage,RegisterPage,DashboardPage,ProjectWorkspacePage}.tsx`, routing in
+`App.tsx`/`main.tsx`.
+
+**Real bugs found and fixed while testing this in the browser** (not just
+frontend mistakes - two were backend bugs):
+1. **Backend**: `DocumentController::index()`, `ExcerptController::index()`,
+   `NoteController::index()` wrapped an already-paginated Eloquent
+   paginator (which serializes as `{data, links, meta}`) in ANOTHER
+   `['data' => ...]`, producing `{data: {data: [...], links, meta}}` -
+   double-wrapped, inconsistent with `ProjectController::index()` which
+   returns the paginator directly. Fixed by removing the extra wrap in all
+   three; **every paginated list endpoint now has the same
+   `{data: [...], links, meta}` shape.** If you add a new paginated index
+   endpoint, match this, not a `['data' => ...]` wrap.
+2. **Frontend**: PDF.js 6.x's URL-based loading path calls `URL.parse()`
+   (a very new static method) and its worker message handling calls
+   `Promise.try()` (same) - both threw `TypeError: ... is not a function`
+   in the Chrome build used for testing. Fixed by (a) downgrading
+   `pdfjs-dist` to `^4.8.69`, which doesn't need either API, and (b) loading
+   the PDF via `getDocument({ data: new Uint8Array(arrayBuffer) })` instead
+   of `getDocument({ url: objectBlobUrl })`, which avoids the URL-parsing
+   code path entirely regardless of pdf.js version.
+3. **Dev-env gotcha, not a code bug**: after changing `pdfjs-dist`'s version
+   in `package.json`, the already-running `npm run dev` process kept
+   serving the OLD pre-bundled dependency from its in-memory cache /
+   `node_modules/.vite` - deleting that folder wasn't even enough on its
+   own; the dev server process itself had to be killed and restarted
+   before the browser picked up the new version. If a dependency version
+   change doesn't seem to take effect, restart `npm run dev`, don't just
+   clear the cache.
+4. Minor: `useCreateProject`/`useUploadDocument` weren't invalidating the
+   `['usage']` query, so the "X / Y projects" counter on the dashboard
+   went stale after creating a project. Fixed (both now also invalidate
+   `['usage']`).
+
+**Not done yet in the web app**: theme toggle (dark is the only theme right
+now), link-creation UX is minimal (double-click to enter "link mode", no
+visual affordance for notes - only excerpts currently wired via
+`onOpenExcerpt`), no annotation (highlight/comment) UI yet (only excerpt
+creation from text selection), no account/billing/settings pages, no
+responsive/mobile-width layout pass, no accessibility pass (docs/05 section
+5.6 WCAG 2.2 AA target untouched), bundle isn't code-split (pdf.worker is
+1.3MB, main bundle is ~690KB - fine for now, listed in build output as a
+warning). FE-0xx test suite (Playwright or similar) not started.
+
 ## Not started yet
 - Non-API Phase 7 items: OpenAPI spec generation (docs/04 section 4.7),
   observability/monitoring, backup/restore drill, deployment checklist
-  (docs/09), FE-0xx tests (need the web app to exist first), mobile tests,
-  smoke-test checklist automation. These can wait until web/mobile exist.
-- **Web frontend** (`web/` — React 19 + TS + Vite + Tailwind v4): scaffolded
-  and in progress. Done so far: Vite+React+TS+Tailwind v4 project created,
-  deps installed (react-router-dom, @tanstack/react-query, axios, zustand,
-  react-hook-form+zod, pdfjs-dist, clsx/tailwind-merge/lucide-react).
-  `src/lib/api.ts` (axios client with auto bearer token + X-Organization-Id
-  header injection + 401-logout interceptor), `src/stores/auth.ts` (zustand,
-  persisted to localStorage), `src/types/api.ts` (all API response shapes),
-  `src/lib/pdf.ts` (pdfjs-dist worker setup), `src/components/ui.tsx`
-  (Button/Input/Card/Label/FieldError/EmptyState/Spinner primitives),
-  `src/pages/LoginPage.tsx` + `RegisterPage.tsx` done. **Next**: router setup
-  in `App.tsx`/`main.tsx`, Dashboard (project list+create+usage), then the
-  project workspace page (document upload, PDF.js viewer with text
-  selection → excerpt, notes, canvas, export trigger).
+  (docs/09), mobile tests, smoke-test checklist automation.
 - **Mobile app** (`chandaktext_mob/` — Flutter): not started. Folder name
   confirmed by user: `chandaktext_mob`, sibling of `backend/` and `web/`.
 
