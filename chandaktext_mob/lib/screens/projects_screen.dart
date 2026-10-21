@@ -120,9 +120,16 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                         '${project.notesCount} notes',
                       ),
                       trailing: const Icon(Icons.chevron_right),
-                      onTap: () => Navigator.of(context).push(
-                        MaterialPageRoute(builder: (_) => ProjectDetailScreen(project: project)),
-                      ),
+                      onTap: () async {
+                        // Document/excerpt/note counts can change while the
+                        // user is inside the project (upload, add note,
+                        // etc.) - refresh this list on return rather than
+                        // showing stale counts indefinitely.
+                        await Navigator.of(context).push(
+                          MaterialPageRoute(builder: (_) => ProjectDetailScreen(project: project)),
+                        );
+                        if (mounted) setState(_load);
+                      },
                     ),
                   ),
               ],

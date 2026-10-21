@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
@@ -21,6 +22,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   late Future<List<Excerpt>> _excerpts;
   bool _uploading = false;
   String? _exportMessage;
+  Timer? _pollTimer;
 
   @override
   void initState() {
@@ -28,10 +30,32 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     _reload();
   }
 
+  @override
+  void dispose() {
+    _pollTimer?.cancel();
+    super.dispose();
+  }
+
   void _reload() {
     _documents = ProjectApi.listDocuments(widget.project.id);
     _notes = ProjectApi.listNotes(widget.project.id);
     _excerpts = ProjectApi.listExcerpts(widget.project.id);
+    _scheduleDocumentPoll();
+  }
+
+  // Documents move processing -> ready/failed in the background (see
+  // ProcessDocumentJob on the backend); poll gently while any loaded
+  // document is still processing, same as the web app's refetchInterval.
+  void _scheduleDocumentPoll() {
+    _pollTimer?.cancel();
+    _documents.then((docs) {
+      if (!mounted) return;
+      if (docs.any((d) => d.status == 'processing')) {
+        _pollTimer = Timer(const Duration(milliseconds: 2500), () {
+          if (mounted) setState(_reload);
+        });
+      }
+    }).catchError((_) {});
   }
 
   Future<void> _uploadPdf() async {
