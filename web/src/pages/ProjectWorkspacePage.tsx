@@ -20,6 +20,7 @@ import {
 } from '@/lib/queries'
 import { api, apiErrorMessage } from '@/lib/api'
 import { Button, Card, EmptyState, Spinner } from '@/components/ui'
+import CitationEditor from '@/components/CitationEditor'
 import PdfViewer from '@/components/PdfViewer'
 import WorkspaceCanvas from '@/components/WorkspaceCanvas'
 import type { Document, Excerpt } from '@/types/api'
@@ -286,6 +287,7 @@ export default function ProjectWorkspacePage() {
                     <span className="text-red-400">Failed: {doc.failure_reason}</span>
                   )}
                 </p>
+                {doc.status === 'ready' && <CitationEditor projectId={projectId!} document={doc} />}
               </Card>
             ))}
           </div>

@@ -2,6 +2,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { api } from '@/lib/api'
 import type {
   Annotation,
+  CitationMetadata,
   Document,
   Excerpt,
   ExportJob,
@@ -101,6 +102,20 @@ export function useUploadDocument(projectId: string | undefined) {
       queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'documents'] })
       queryClient.invalidateQueries({ queryKey: ['usage'] })
     },
+  })
+}
+
+export function useUpdateDocumentCitation(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ documentId, citation }: { documentId: string; citation: CitationMetadata | null }) =>
+      (
+        await api.patch<{ data: Document }>(`/documents/${documentId}`, {
+          citation_metadata: citation,
+        })
+      ).data.data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'documents'] }),
   })
 }
 

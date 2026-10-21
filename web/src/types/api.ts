@@ -11,6 +11,14 @@ export interface Project {
   excerpts_count?: number
 }
 
+export interface CitationMetadata {
+  author?: string | null
+  title?: string | null
+  year?: string | null
+  publisher?: string | null
+  url?: string | null
+}
+
 export interface Document {
   id: string
   organization_id: string
@@ -24,6 +32,9 @@ export interface Document {
   page_count: number | null
   status: 'processing' | 'ready' | 'failed'
   failure_reason: string | null
+  citation_metadata: CitationMetadata | null
+  citation_apa: string | null
+  citation_mla: string | null
   created_at: string
   updated_at: string
 }

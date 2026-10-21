@@ -2,6 +2,7 @@
 
 namespace App\Models;
 
+use App\Services\CitationFormatter;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -16,8 +17,30 @@ class Document extends Model
     protected $fillable = [
         'organization_id', 'project_id', 'uploaded_by', 'original_filename',
         'storage_key', 'checksum', 'mime_type', 'size_bytes', 'page_count',
-        'status', 'failure_reason', 'thumbnail_storage_key',
+        'status', 'failure_reason', 'thumbnail_storage_key', 'citation_metadata',
     ];
+
+    protected $casts = [
+        'citation_metadata' => 'array',
+    ];
+
+    // Computed, not stored - always included in the API response so web/
+    // mobile never need a second request just to show a citation string.
+    protected $appends = ['citation_apa', 'citation_mla'];
+
+    public function getCitationApaAttribute(): ?string
+    {
+        return $this->citation_metadata
+            ? app(CitationFormatter::class)->format('apa', $this->citation_metadata)
+            : null;
+    }
+
+    public function getCitationMlaAttribute(): ?string
+    {
+        return $this->citation_metadata
+            ? app(CitationFormatter::class)->format('mla', $this->citation_metadata)
+            : null;
+    }
 
     public function organization(): BelongsTo
     {

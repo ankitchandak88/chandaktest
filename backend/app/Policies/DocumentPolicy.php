@@ -20,6 +20,11 @@ class DocumentPolicy
         return $this->canEditProject($user, $project);
     }
 
+    public function update(User $user, Document $document): bool
+    {
+        return $this->canEditProject($user, $document->project);
+    }
+
     public function delete(User $user, Document $document): bool
     {
         return $this->canEditProject($user, $document->project);

@@ -101,6 +101,24 @@ class DocumentController extends Controller
         return response()->json(['data' => $document]);
     }
 
+    public function update(Request $request, Document $document)
+    {
+        $this->authorize('update', $document);
+
+        $data = $request->validate([
+            'citation_metadata' => ['present', 'nullable', 'array'],
+            'citation_metadata.author' => ['nullable', 'string', 'max:255'],
+            'citation_metadata.title' => ['nullable', 'string', 'max:500'],
+            'citation_metadata.year' => ['nullable', 'string', 'max:9'],
+            'citation_metadata.publisher' => ['nullable', 'string', 'max:255'],
+            'citation_metadata.url' => ['nullable', 'url', 'max:2048'],
+        ]);
+
+        $document->update($data);
+
+        return response()->json(['data' => $document]);
+    }
+
     public function page(Request $request, Document $document, int $page)
     {
         $this->authorize('view', $document);

@@ -59,6 +59,7 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::get('/projects/{project}/documents', [DocumentController::class, 'index']);
     Route::post('/projects/{project}/documents', [DocumentController::class, 'store'])->middleware('throttle:uploads');
     Route::get('/documents/{document}', [DocumentController::class, 'show']);
+    Route::patch('/documents/{document}', [DocumentController::class, 'update']);
     Route::get('/documents/{document}/pages/{page}', [DocumentController::class, 'page']);
     Route::get('/documents/{document}/download', [DocumentController::class, 'download']);
     Route::delete('/documents/{document}', [DocumentController::class, 'destroy']);
