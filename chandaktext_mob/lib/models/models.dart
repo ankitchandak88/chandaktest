@@ -256,3 +256,23 @@ class UsageSummary {
         storageLimitBytes: json['storage_bytes']['limit'] as int,
       );
 }
+
+/// Phase 10: mirrors App\Models\ProjectShare's JSON shape (password_hash is
+/// always hidden server-side - see $hidden on that model).
+class ProjectShare {
+  final String id;
+  final String token;
+  final DateTime expiresAt;
+  final DateTime? revokedAt;
+
+  ProjectShare({required this.id, required this.token, required this.expiresAt, this.revokedAt});
+
+  factory ProjectShare.fromJson(Map<String, dynamic> json) => ProjectShare(
+        id: json['id'] as String,
+        token: json['token'] as String,
+        expiresAt: DateTime.parse(json['expires_at'] as String),
+        revokedAt: json['revoked_at'] != null ? DateTime.parse(json['revoked_at'] as String) : null,
+      );
+
+  bool get isActive => revokedAt == null && expiresAt.isAfter(DateTime.now());
+}

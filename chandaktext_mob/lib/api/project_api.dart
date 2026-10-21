@@ -165,4 +165,27 @@ class ProjectApi {
     final response = await _dio.put('/notes/$noteId/tags', data: {'tag_ids': tagIds});
     return ResearchNote.fromJson(response.data['data'] as Map<String, dynamic>).tags;
   }
+
+  static Future<List<ProjectShare>> listShares(String projectId) async {
+    final response = await _dio.get('/projects/$projectId/shares');
+    return (response.data['data'] as List)
+        .map((e) => ProjectShare.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static Future<ProjectShare> createShare(
+    String projectId, {
+    String? password,
+    int? expiresInDays,
+  }) async {
+    final response = await _dio.post('/projects/$projectId/shares', data: {
+      if (password != null && password.isNotEmpty) 'password': password,
+      if (expiresInDays != null) 'expires_in_days': expiresInDays,
+    });
+    return ProjectShare.fromJson(response.data['data'] as Map<String, dynamic>);
+  }
+
+  static Future<void> revokeShare(String shareId) async {
+    await _dio.delete('/shares/$shareId');
+  }
 }

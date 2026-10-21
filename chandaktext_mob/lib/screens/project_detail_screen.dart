@@ -8,6 +8,7 @@ import '../models/models.dart';
 import 'pdf_reader_screen.dart';
 import 'project_canvas.dart';
 import '../widgets/citation_editor.dart';
+import '../widgets/share_manager.dart';
 
 class ProjectDetailScreen extends StatefulWidget {
   const ProjectDetailScreen({super.key, required this.project});
@@ -224,6 +225,15 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
             ],
           ),
           actions: [
+            IconButton(
+              icon: const Icon(Icons.link),
+              tooltip: 'Share links',
+              onPressed: () => showModalBottomSheet(
+                context: context,
+                isScrollControlled: true,
+                builder: (_) => ShareManager(projectId: widget.project.id),
+              ),
+            ),
             IconButton(
               icon: const Icon(Icons.ios_share),
               tooltip: 'Export',
