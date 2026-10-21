@@ -53,6 +53,17 @@ class ProjectApi {
     return ReaderDocument.fromJson(response.data['data']);
   }
 
+  static Future<ReaderDocument> updateDocumentCitation(
+    String documentId,
+    Map<String, dynamic>? citationMetadata,
+  ) async {
+    final response = await _dio.patch(
+      '/documents/$documentId',
+      data: {'citation_metadata': citationMetadata},
+    );
+    return ReaderDocument.fromJson(response.data['data'] as Map<String, dynamic>);
+  }
+
   static Future<List<int>> downloadDocumentBytes(String documentId) async {
     final response = await _dio.get<List<int>>(
       '/documents/$documentId/download',

@@ -7,6 +7,7 @@ import '../api/project_api.dart';
 import '../models/models.dart';
 import 'pdf_reader_screen.dart';
 import 'project_canvas.dart';
+import '../widgets/citation_editor.dart';
 
 class ProjectDetailScreen extends StatefulWidget {
   const ProjectDetailScreen({super.key, required this.project});
@@ -297,16 +298,38 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                 ),
               for (final doc in _documents)
                 Card(
-                  child: ListTile(
-                    title: Text(doc.originalFilename, overflow: TextOverflow.ellipsis),
-                    subtitle: Text(
-                      doc.status == 'ready'
-                          ? '${doc.pageCount ?? '?'} pages'
-                          : doc.status == 'failed'
-                              ? 'Failed: ${doc.failureReason}'
-                              : 'Processing…',
-                    ),
+                  child: InkWell(
                     onTap: doc.status == 'ready' ? () => _openDocument(doc) : null,
+                    child: Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(doc.originalFilename, overflow: TextOverflow.ellipsis),
+                          const SizedBox(height: 4),
+                          Text(
+                            doc.status == 'ready'
+                                ? '${doc.pageCount ?? '?'} pages'
+                                : doc.status == 'failed'
+                                    ? 'Failed: ${doc.failureReason}'
+                                    : 'Processing…',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                          if (doc.status == 'ready') ...[
+                            const SizedBox(height: 6),
+                            CitationEditor(
+                              document: doc,
+                              onUpdated: (updated) {
+                                setState(() {
+                                  final idx = _documents.indexWhere((d) => d.id == updated.id);
+                                  if (idx != -1) _documents[idx] = updated;
+                                });
+                              },
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
                   ),
                 ),
               _loadMoreButton(

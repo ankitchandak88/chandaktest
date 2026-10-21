@@ -90,6 +90,9 @@ class ReaderDocument {
   final int? pageCount;
   final String status;
   final String? failureReason;
+  final Map<String, dynamic>? citationMetadata;
+  final String? citationApa;
+  final String? citationMla;
 
   ReaderDocument({
     required this.id,
@@ -98,6 +101,9 @@ class ReaderDocument {
     required this.status,
     this.pageCount,
     this.failureReason,
+    this.citationMetadata,
+    this.citationApa,
+    this.citationMla,
   });
 
   factory ReaderDocument.fromJson(Map<String, dynamic> json) => ReaderDocument(
@@ -107,6 +113,9 @@ class ReaderDocument {
         pageCount: json['page_count'] as int?,
         status: json['status'] as String,
         failureReason: json['failure_reason'] as String?,
+        citationMetadata: (json['citation_metadata'] as Map?)?.cast<String, dynamic>(),
+        citationApa: json['citation_apa'] as String?,
+        citationMla: json['citation_mla'] as String?,
       );
 }
 
