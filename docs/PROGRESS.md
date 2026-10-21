@@ -339,7 +339,7 @@ if exports ever seem to run "old" code again, check
 Full backend suite after Phase 13: **101 passed (268 assertions)**. Web
 `tsc --noEmit`: clean.
 
-### Phases 14–18 (ops/release-prep) — 14 and 15 done, 16–18 in progress
+### Phases 14–18 (ops/release-prep) — ALL DONE, committed, cross-verified
 
 User asked for these to be phased too, after confirming testing/smoke-test
 status. **Decisions locked in** (so don't re-ask):
@@ -379,33 +379,68 @@ new `MYSQLDUMP_BINARY_PATH` env var. Scheduled daily (`backup:run` 02:00,
 `backup:clean` 02:30, `routes/console.php`). Full suite: 106 passed.
 
 **Phases 16–18 — dispatched to 3 parallel fork agents** (user asked to
-speed this up with multiple agents), each scoped to its own files only,
-none committing — the resuming session must review and commit their
-output once all three report back:
-- Phase 16 (`docs/09-deployment.md` + a supervisor config template):
-  env vars, first-deploy steps, queue worker supervision, web build/serve,
-  storage/permissions, HTTPS/reverse-proxy notes, `/up` as the LB health
-  check, rollback notes.
-- Phase 17 (`docs/mobile-test-matrix.md`): a real API-level/screen-size
-  matrix grounded in `chandaktext_mob/android/app/build.gradle`'s actual
-  min/target SDK, executing a second-AVD smoke boot where the machine's
-  resources allow it (don't fight emulator instability indefinitely — same
-  judgment call as earlier in this session), iOS flagged as
-  documentation-only (needs a Mac).
-- Phase 18 (`docs/app-store-submission.md` + `docs/privacy-policy-draft.md`):
-  icon/screenshot size requirements for both stores, a grounded store
-  listing draft (real feature set, not invented), a real privacy-policy
-  draft (flagging the AI-provider third-party data sharing specifically),
-  Play Data Safety checklist, Android signing/AAB prep, iOS steps flagged
-  as needing Mac access.
+speed this up), each scoped to its own files only, none committing. All
+three reported back, were reviewed (spot-checked their factual claims
+against the real codebase before trusting them — e.g. the migration
+rollback warning, the `VITE_API_URL` fallback, the min/target SDK values
+— all confirmed accurate), then committed:
 
-**Next step on resume**: check whether all three fork agents have
-reported back (if this session is being read before that happened,
-resume by checking agent status / re-dispatching anything that didn't
-finish); once all three are in, review their output for accuracy against
-the real codebase, commit, then do a final cross-verification + smoke
-test pass end-to-end (explicitly requested before the user went to sleep)
-before considering this entire ops batch done.
+- **Phase 16** (`docs/09-deployment.md` + `deploy/supervisor-queue-worker.conf`
+  + `web/.env.example`, which didn't exist before): env var checklist,
+  first-deploy steps, queue worker + scheduler setup (both required —
+  nothing runs itself), web build/serve, storage/reverse-proxy notes,
+  `/up` as the LB health check, a rollback section flagging one migration
+  (`..._add_pdf_highlights_format_to_exports_table.php`) that isn't safely
+  reversible once `pdf_highlights` export rows exist.
+- **Phase 17** (`docs/mobile-test-matrix.md`): real API-level/screen-size
+  matrix grounded in the app's actual declared SDK range (`minSdk=24`,
+  `targetSdk=36`, iOS deployment target 13.0 — checked against source).
+  Attempted a second emulator config (API 37.2-beta3); found and fixed two
+  real local environment issues (missing AVD registration `.ini`, a stale
+  `hardware-qemu.ini.lock`) but the emulator itself never left `adb`'s
+  `offline` state after 9+ minutes — stopped per the "don't fight
+  instability indefinitely" judgment call, confirmed cleanly shut down.
+  iOS flagged as needing Mac/Xcode access.
+- **Phase 18** (`docs/app-store-submission.md` + `docs/privacy-policy-draft.md`):
+  icon/screenshot requirements for both stores, a grounded store listing
+  draft, a privacy policy draft (flagging the AI-provider third-party data
+  sharing specifically, conditional on a real provider being configured),
+  a Play Data Safety table. **Two real gaps found and flagged** (not
+  fixed — documentation phase): release builds currently sign with the
+  **debug keystore** (no release keystore/`key.properties` exists), and no
+  custom app icon or screenshots exist anywhere in the repo — both block
+  either store submission regardless of code readiness.
+
+**Cross-verification + smoke test pass** (explicitly requested before the
+user went to sleep), done after all five phases landed:
+- Backend: full suite **106 passed**.
+- Web: found and fixed a **real build-breaking bug** that plain
+  `tsc --noEmit` had missed (likely stale incremental build info) but
+  `npm run build` (`tsc -b`) caught correctly — `useStartExport`'s
+  parameter type hadn't been widened to include `'docx'` when Phase 13
+  added that format. Fixed, `npm run build` now clean; `oxlint` shows only
+  pre-existing warnings in files untouched this session.
+- Mobile: `flutter analyze` clean, `flutter test` passes.
+- **Real physical device verification** (new, beyond the emulator): user
+  connected their own phone (OnePlus CPH2491, Android 16/API 36,
+  1240×2772 @560dpi) over USB. Rebuilt the debug APK for `android-arm64`
+  (existing one was x86_64-only), worked around an OEM ADB-install
+  verification block, and confirmed login + project list + document view
+  render correctly and fetch real data from the live backend with no
+  crashes. Found and documented a real gotcha for this: the app's
+  `network_security_config.xml` only allowlists cleartext HTTP to
+  `10.0.2.2` and the literal string `localhost` — NOT the `127.0.0.1` IP
+  literal, which Android silently blocks on API 28+ even though it's the
+  same host. Restored the device's security settings afterward.
+
+**Everything from Phases 1–18 is now implemented, tested, and committed.**
+No open threads left from this session. Next session should read this
+file top-to-bottom before doing anything, per the file's own instruction
+at the top, but there is no specific "resume task" queued — check with
+the user for what's next (Phase 13's DOCX library choice is resolved;
+the Phase 18-flagged release-blockers — debug-keystore signing, missing
+app icon/screenshots — are real work items whenever a store submission is
+actually imminent, not urgent now).
 
 ---
 
