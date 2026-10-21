@@ -12,7 +12,7 @@ export default function DashboardPage() {
   // BUG-006: flatten every loaded page into one list. Beyond the first 20
   // projects, more only appear after "Load more" - see hasNextPage below.
   const projects = data?.pages.flatMap((page) => page.data) ?? []
-  const total = data?.pages[0]?.meta.total
+  const total = data?.pages[0]?.total
 
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)

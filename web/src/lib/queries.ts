@@ -28,7 +28,7 @@ export function useProjects() {
       (await api.get<Paginated<Project>>('/projects', { params: { page: pageParam } })).data,
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
-      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
+      lastPage.current_page < lastPage.last_page ? lastPage.current_page + 1 : undefined,
   })
 }
 
@@ -71,7 +71,7 @@ export function useDocuments(projectId: string | undefined) {
       ).data,
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
-      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
+      lastPage.current_page < lastPage.last_page ? lastPage.current_page + 1 : undefined,
     enabled: !!projectId,
     // Documents move processing -> ready/failed in the background; poll
     // gently while any (on the currently-loaded pages) are still processing.
@@ -114,7 +114,7 @@ export function useExcerpts(projectId: string | undefined) {
       ).data,
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
-      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
+      lastPage.current_page < lastPage.last_page ? lastPage.current_page + 1 : undefined,
     enabled: !!projectId,
   })
 }
@@ -142,7 +142,7 @@ export function useNotes(projectId: string | undefined) {
       ).data,
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
-      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
+      lastPage.current_page < lastPage.last_page ? lastPage.current_page + 1 : undefined,
     enabled: !!projectId,
   })
 }

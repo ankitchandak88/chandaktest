@@ -116,7 +116,18 @@ export interface UsageSummary {
   documents_per_project_limit: number
 }
 
+// BUG-006 follow-up: the paginated endpoints (Project/Document/Excerpt/
+// Note controllers) return `response()->json($paginator)` directly, i.e.
+// Laravel's native flat LengthAwarePaginator shape - current_page/
+// last_page/total sit at the SAME top level as `data`, confirmed against
+// a live response (`curl .../api/v1/projects`), not a nested `meta` object
+// as an earlier version of this type assumed (that version was never
+// exercised against >1 page of real data, so the mismatch shipped
+// unnoticed - `npm run build` only type-checks, it doesn't catch a wrong
+// runtime shape).
 export interface Paginated<T> {
   data: T[]
-  meta: { current_page: number; last_page: number; total: number }
+  current_page: number
+  last_page: number
+  total: number
 }
