@@ -3,6 +3,54 @@
 Resume point for future sessions. **Read this file first** before continuing.
 Update it after every phase / every meaningful breakpoint.
 
+## BREAKPOINT (2026-10-22) — Annotation/drawing engine in progress, Phase 1 done
+
+User compared real LiquidText screenshots against the app and found a real
+gap: the backend has a complete `annotations` API (highlight/underline/
+comment/ink types) that **neither frontend ever used** - this was always in
+original scope (`Research_SaaS_MVP_Markdown_Docs/07-mobile-apps-store-
+release.md` §7.2), just never built. Full plan at
+`C:\Users\Prem\.claude\plans\sparkling-wobbling-aurora.md` (approved) -
+read it before continuing this work. User's explicit bar: "better than
+LiquidText, 100x, no compromise on design or functionality" - treat the
+plan's mandatory final cross-verification table as the actual finish line,
+not "it compiles."
+
+**Phase 1 — DONE, committed (`d141710`)**: real highlight/underline/comment
+annotations, both platforms.
+- Web: `PdfViewer.tsx` now has Highlight/Underline buttons in the selection
+  popup + a Comment pin tool, rendering a live SVG overlay fed by the
+  previously-unused `useAnnotations` hook. New `useDeleteAnnotation`.
+- Mobile: discovered `syncfusion_flutter_pdfviewer` has a **complete
+  built-in native annotation system** (`HighlightAnnotation`/
+  `UnderlineAnnotation`/`StickyNoteAnnotation`, `addAnnotation`/
+  `removeAnnotation`/`onAnnotationSelected`) that was simply never used -
+  used that instead of hand-rolling rect math. `getSelectedTextLines()`
+  gives real per-line bounds (PDF point-space); normalized to the same 0-1
+  convention as web via a `syncfusion_flutter_pdf` `PdfDocument` parsed
+  from the same bytes. Mobile excerpts also got real rects as a side
+  effect (the old full-page placeholder is gone).
+- New `Annotation` model + 3 API methods on mobile (none existed before).
+- Verified: backend 109 tests passed (3 new); web `npm run build`+`oxlint`
+  clean; mobile `flutter analyze`/`flutter test` clean, debug APK builds
+  for both x86_64 and arm64; backend contract double-checked directly via
+  curl (create/list/delete, all 3 types) since the Chrome browser tool is
+  not connecting in this environment (tried repeatedly, consistent
+  failure - likely an environment limitation, not a user-side toggle).
+  **Live on-device visual check still pending** - user's phone disconnected
+  for the night; do this first on resume if it's not done yet (reconnect
+  via USB, `adb reverse tcp:8123 tcp:8123`, install the already-built
+  `chandaktext_mob/build/app/outputs/flutter-apk/app-debug.apk`).
+
+**Next on resume**: Phase 2 (pen + highlighter-as-stroke + eraser + lasso,
+the actual "drawing engine" - `perfect-freehand`/`perfect_freehand` already
+added to both `web/package.json`-equivalent install list and
+`pubspec.yaml`). Then Phase 3 (Drawing/Document/Workspace mode tabs +
+Outline + HiLiteView), Phase 4 (polish: undo/redo, AI summarize, bake
+annotations into PDF export). Do the live phone check for Phase 1 before
+or alongside starting Phase 2, not after - don't let verification debt
+stack up across phases.
+
 ## Decisions locked in (do not re-ask)
 - DB: **MySQL** (Laragon `mysql-8.0.30-winx64`, root / no password). Databases:
   `chandaktext` (dev), `chandaktext_test` (automated tests). NOT PostgreSQL.
