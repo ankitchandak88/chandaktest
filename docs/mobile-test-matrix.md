@@ -22,6 +22,40 @@ iOS: `chandaktext_mob/ios/Runner.xcodeproj/project.pbxproj` declares
 | 3 | A `minSdkVersion`-class device (API 24, Android 7.0) | 24 | phone | ❌ Not attempted — no API 24 system image installed locally (only `android-36`, `android-37.2`, `android-37.2-beta3` are present under the SDK's `system-images/`), and downloading one wasn't justified for this pass given config #2 already surfaced an unrelated environment issue worth fixing first. **Needs to happen before a store release** — this is the oldest OS version real users could be on. |
 | 4 | A tablet-class config (e.g. Pixel Tablet, ~1600×2560, lower density-independent scaling) | current | tablet | ❌ Not attempted — no tablet AVD exists yet. LiquidText-style canvas/PDF apps are exactly the kind of app where tablet layout (more canvas real estate, different gesture-area proportions) is worth checking before release, not a formality. |
 | 5 | A genuinely low-end device profile (2GB RAM class, API 24–26) | 24–26 | small/low-density | ❌ Not attempted. Closest thing to "will this run acceptably on a cheap phone," which emulator configs only approximate anyway — real-device testing matters more here than for the other rows. |
+| 6 | Real hardware: OnePlus CPH2491, Android 16 (API 36), 1240×2772 @560dpi, OxygenOS | 36 | real phone | ✅ **Verified live, real USB-connected device, not an emulator** (2026-10-22) — see "Real-device verification" below. |
+
+### Real-device verification (OnePlus CPH2491, 2026-10-22)
+
+User connected their own phone via USB debugging. Installed the debug APK
+(had to rebuild for `android-arm64` — the existing debug APK was
+x86_64-only from emulator builds, `INSTALL_FAILED_NO_MATCHING_ABIS`
+against real arm64 hardware). OEM-level `INSTALL_FAILED_VERIFICATION_FAILURE`
+on first install attempt (common on OnePlus/ColorOS/OxygenOS - Play
+Protect-style ADB install verification) - worked after temporarily
+toggling `settings put global verifier_verify_adb_installs 0` /
+`package_verifier_enable 0`, both restored to `1` afterward.
+
+**Real finding, not an app bug but worth documenting for future
+real-device testing**: the app's `network_security_config.xml` only
+allowlists cleartext HTTP to the literal domains `10.0.2.2` (emulator-only
+alias) and `localhost` - NOT `127.0.0.1`. Testing against a real device
+over USB requires `adb reverse tcp:8123 tcp:8123` plus building with
+`--dart-define=API_URL=http://localhost:8123/api/v1` (not `127.0.0.1`,
+even though they're the same host) - the IP literal is silently blocked
+by Android's Network Security Config on API 28+, the domain string name
+is not.
+
+**Result**: app launched cleanly (no crash, confirmed via `adb logcat`
+filtered for `FATAL`/`AndroidRuntime` - the only fatal-level lines seen
+were from OnePlus's own unrelated camera daemon, `APS_ALOG`, not this
+app), login screen rendered correctly at this device's higher density
+(560dpi vs. the emulator's 420dpi), logged in against the real backend
+over `adb reverse`, and loaded real project data from the live database
+(3 projects, correct document/note counts matching the actual DB state).
+Navigated into a project and confirmed the document/citation view
+("Ask AI" entry point) rendered correctly too. This is the first
+verification on genuine physical hardware rather than an emulator this
+entire project.
 
 ### What was attempted for row 2
 
@@ -86,12 +120,15 @@ Xcode archive/signing setup and an Apple Developer account — tracked in
 
 ## What this phase actually proves vs. doesn't
 
-- **Proven**: the app works correctly on one real, specific Android
-  config (Pixel 10a / API 36), across every feature this project has
-  shipped (Phases 7–13).
+- **Proven**: the app works correctly on one emulator config (Pixel 10a /
+  API 36) across every feature this project has shipped (Phases 7–13),
+  and separately on one genuine physical device (OnePlus CPH2491, also
+  API 36 but different screen density/manufacturer skin) for core
+  flows (login, project list, document/citation view) against the real
+  backend over the network, not just rendering in isolation.
 - **Not proven**: behavior on the oldest supported API level (24), on a
   tablet layout, on a lower-end device profile, on any Play Store-variant
-  build, or on iOS at all. Treat the single verified config as a smoke
-  test that the app *works*, not as evidence it works *everywhere it
-  claims to support* — the `minSdkVersion=24` claim in particular is
-  currently unverified.
+  build, or on iOS at all. Both verified configs happen to be API 36 -
+  treat this as evidence the app *works*, not as evidence it works
+  *everywhere it claims to support* — the `minSdkVersion=24` claim in
+  particular is still unverified on any actual API 24 device/emulator.
