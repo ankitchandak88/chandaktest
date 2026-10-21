@@ -101,13 +101,36 @@ stamping) - this can be proven with Pest tests + generating a real export
 and inspecting the PDF directly, exactly like BE-009/Phase 12 was earlier
 this session.
 
-**Next on resume, in this order**: 1) **Live-verify Phases 1-3 on the
+**Phase 4 (partial) — DONE, committed (`92b9a6a`)**: annotations
+(highlight/underline/ink/comment) now get stamped onto the
+`pdf_highlights` export too (new `Project::annotations()` relation,
+`PdfHighlightOverlayGenerator::drawAnnotation()`). Fully verified, not
+just build-clean: new Pest test + a real generated export visually
+inspected (via the Read tool's native PDF rendering) with all 4
+annotation types on the real smoke-test document - yellow highlight
+outline, blue underline, red ink line path, pink comment marker, all
+correctly positioned. This is the template for "actually verify it," not
+"it compiles" - same bar needed for everything still pending below.
+
+**Real bug found and fixed via code review (`a8c5f24`), while phone was
+still offline**: rather than keep stacking unverified frontend work,
+re-read `syncfusion_flutter_pdfviewer`'s own source carefully and found
+the mobile drawing coordinate math (`_pageRectInViewport` in
+`pdf_reader_screen.dart`) had a wrong assumption - `PdfPageLayoutMode
+.single` fits the page to the viewport's **width only** at zoom=1.0 (confirmed:
+`zoomLevel` is hard-floored at 1.0, `greyAreaSize` is computed purely
+from height), not "whole page visible, centered both axes" as originally
+assumed. Fixed the formula and added a `jumpToPage` reset on entering any
+drawing tool to establish the top-aligned state the math now assumes.
+This is a genuine improvement, but **does not replace live verification**
+- it increases confidence, it isn't proof.
+
+**Next on resume, in this order**: 1) **Live-verify Phases 1-4 on the
 real device the moment it reconnects** - this is still the single
-highest-priority item, don't let it keep sliding. Specifically check the
-mobile drawing coordinate mapping (`_pageRectInViewport`/
-`_localToNormalized` in `pdf_reader_screen.dart`) first, since that's the
-piece most likely to need adjustment. 2) Finish Phase 4's remaining
-frontend-dependent items (undo/redo, AI summarize via
+highest-priority item, don't let it keep sliding. The mobile drawing
+coordinate mapping has now been corrected once via review but is still
+unconfirmed on real hardware - check it first. 2) Finish Phase 4's
+remaining frontend-dependent items (undo/redo, AI summarize via
 `AiAssistantService`) only after verification, not before. 3) The
 Drawing/Document/Workspace mode-tab restructuring. 4) The plan's
 mandatory final cross-verification table - do not consider this done
