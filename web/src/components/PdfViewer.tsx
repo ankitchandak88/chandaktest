@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { getStroke } from 'perfect-freehand'
 import { pdfjsLib } from '@/lib/pdf'
 import { api } from '@/lib/api'
+import { getSvgPathFromStroke } from '@/lib/freehand'
 import { useAnnotations, useCreateAnnotation, useDeleteAnnotation } from '@/lib/queries'
 import type { Annotation, SourceRect } from '@/types/api'
 import { Button } from '@/components/ui'
@@ -17,7 +19,19 @@ interface PdfViewerProps {
   onSaveExcerpt: (selection: { pageNumber: number; text: string; rects: SourceRect[] }) => void
 }
 
-type AnnotationTool = 'select' | 'comment'
+type AnnotationTool = 'select' | 'comment' | 'pen' | 'highlighter' | 'eraser' | 'lasso'
+
+interface StrokePoint {
+  x: number
+  y: number
+  pressure: number
+}
+
+interface InkPayload {
+  points: [number, number, number][]
+  size: number
+  tool: 'pen' | 'highlighter'
+}
 
 // Shared palette: amber for highlight matches the existing export-time
 // highlight-overlay color (PdfHighlightOverlayGenerator's amber-400), so a
@@ -26,15 +40,74 @@ const HIGHLIGHT_COLOR = '#facc15'
 const UNDERLINE_COLOR = '#38bdf8'
 const COMMENT_COLOR = '#f472b6'
 
+const PEN_COLORS = ['#f8fafc', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b']
+const HIGHLIGHTER_COLORS = ['#facc15', '#4ade80', '#60a5fa', '#f472b6', '#fb923c']
+const PEN_SIZE = 0.004
+const HIGHLIGHTER_SIZE = 0.016
+
+// perfect-freehand's `size` option is in the same unit as the input
+// points - since our points are 0-1 page-normalized, `size` must also be
+// normalized (a fraction of page width) and denormalized back to pixels at
+// render time, same as every other coordinate in this component.
+function strokeToSvgPath(points: [number, number, number][], sizeFraction: number, pageSize: { width: number; height: number }) {
+  const pixelPoints = points.map(([x, y, pressure]) => [x * pageSize.width, y * pageSize.height, pressure])
+  const outline = getStroke(pixelPoints, {
+    size: sizeFraction * pageSize.width,
+    thinning: 0.5,
+    smoothing: 0.5,
+    streamline: 0.5,
+  })
+  return getSvgPathFromStroke(outline)
+}
+
+// Standard ray-casting point-in-polygon test for the lasso tool.
+function pointInPolygon(point: { x: number; y: number }, polygon: { x: number; y: number }[]) {
+  let inside = false
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
+    const xi = polygon[i].x
+    const yi = polygon[i].y
+    const xj = polygon[j].x
+    const yj = polygon[j].y
+    const intersects = yi > point.y !== yj > point.y && point.x < ((xj - xi) * (point.y - yi)) / (yj - yi) + xi
+    if (intersects) inside = !inside
+  }
+  return inside
+}
+
+function annotationAnchor(a: Annotation): { x: number; y: number } | null {
+  if (a.type === 'highlight' || a.type === 'underline') {
+    const rects = (a.payload.rects as SourceRect[] | undefined) ?? []
+    if (!rects.length) return null
+    const r = rects[0]
+    return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+  }
+  if (a.type === 'comment') {
+    return { x: a.payload.x as number, y: a.payload.y as number }
+  }
+  if (a.type === 'ink') {
+    const points = (a.payload.points as [number, number, number][] | undefined) ?? []
+    if (!points.length) return null
+    const mid = points[Math.floor(points.length / 2)]
+    return { x: mid[0], y: mid[1] }
+  }
+  return null
+}
+
 /**
  * Renders every page of a document (fetched as a blob through the
  * authenticated API, never a public URL - docs/02 section 2.6 "keep storage
  * private") with PDF.js, overlays a real text layer so the browser's native
  * text selection works, and turns a selection into a normalized-rectangle
  * excerpt or annotation (docs/03 section 3.3: store rects in 0-1 page space
- * so zoom never breaks alignment). Annotations (highlight/underline/comment)
- * persist via the Annotation API and render as a live overlay - this is the
- * first UI consumer of that API; it previously had no frontend at all.
+ * so zoom never breaks alignment). Annotations (highlight/underline/comment/
+ * ink) persist via the Annotation API and render as a live overlay.
+ *
+ * Phase 2: real drawing tools. Pen/highlighter use perfect-freehand for
+ * pressure-tapered, smooth strokes (one Annotation row per stroke, so erase
+ * is just "delete that row"). Eraser hit-tests the pointer's path against
+ * existing ink strokes/highlight rects live as you drag. Lasso is a
+ * transient selection gesture (closed freehand path -> point-in-polygon
+ * against every annotation's anchor point on the page), not a stored type.
  */
 export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
@@ -46,6 +119,8 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   const [scale] = useState(1.2)
   const [error, setError] = useState<string | null>(null)
   const [tool, setTool] = useState<AnnotationTool>('select')
+  const [penColor, setPenColor] = useState(PEN_COLORS[0])
+  const [highlighterColor, setHighlighterColor] = useState(HIGHLIGHTER_COLORS[0])
   const [pendingComment, setPendingComment] = useState<{
     pageNumber: number
     x: number
@@ -54,6 +129,10 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   } | null>(null)
   const [commentDraft, setCommentDraft] = useState('')
   const [openComment, setOpenComment] = useState<Annotation | null>(null)
+  const [activeStroke, setActiveStroke] = useState<{ pageNumber: number; points: StrokePoint[] } | null>(null)
+  const [lassoPoints, setLassoPoints] = useState<{ pageNumber: number; points: StrokePoint[] } | null>(null)
+  const [lassoSelection, setLassoSelection] = useState<{ pageNumber: number; ids: string[] } | null>(null)
+  const erasedThisDragRef = useRef<Set<string>>(new Set())
 
   const { data: annotations } = useAnnotations(documentId)
   const createAnnotation = useCreateAnnotation(documentId)
@@ -247,32 +326,129 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
     setTool('select')
   }
 
+  const handleStrokeStart = useCallback(
+    (pageNumber: number, point: StrokePoint) => {
+      if (tool === 'pen' || tool === 'highlighter') {
+        setActiveStroke({ pageNumber, points: [point] })
+      } else if (tool === 'lasso') {
+        setLassoPoints({ pageNumber, points: [point] })
+      } else if (tool === 'eraser') {
+        erasedThisDragRef.current = new Set()
+      }
+    },
+    [tool],
+  )
+
+  const handleStrokeMove = useCallback(
+    (pageNumber: number, point: StrokePoint, pageAnnotations: Annotation[], pageSize: { width: number; height: number }) => {
+      if ((tool === 'pen' || tool === 'highlighter') && activeStroke?.pageNumber === pageNumber) {
+        setActiveStroke((prev) => (prev ? { ...prev, points: [...prev.points, point] } : prev))
+      } else if (tool === 'lasso' && lassoPoints?.pageNumber === pageNumber) {
+        setLassoPoints((prev) => (prev ? { ...prev, points: [...prev.points, point] } : prev))
+      } else if (tool === 'eraser') {
+        const thresholdPx = 14
+        for (const a of pageAnnotations) {
+          if (erasedThisDragRef.current.has(a.id)) continue
+
+          let hit = false
+          if (a.type === 'ink') {
+            const points = (a.payload.points as [number, number, number][] | undefined) ?? []
+            hit = points.some(
+              ([px, py]) =>
+                Math.hypot((px - point.x) * pageSize.width, (py - point.y) * pageSize.height) < thresholdPx,
+            )
+          } else if (a.type === 'highlight' || a.type === 'underline') {
+            const rects = (a.payload.rects as SourceRect[] | undefined) ?? []
+            hit = rects.some(
+              (r) => point.x >= r.x && point.x <= r.x + r.width && point.y >= r.y && point.y <= r.y + r.height,
+            )
+          }
+
+          if (hit) {
+            erasedThisDragRef.current.add(a.id)
+            deleteAnnotation.mutate(a.id)
+          }
+        }
+      }
+    },
+    [tool, activeStroke, lassoPoints, deleteAnnotation],
+  )
+
+  const handleStrokeEnd = useCallback(
+    (pageAnnotations: Annotation[]) => {
+      if ((tool === 'pen' || tool === 'highlighter') && activeStroke && activeStroke.points.length > 1) {
+        const payload: InkPayload = {
+          points: activeStroke.points.map((p) => [p.x, p.y, p.pressure]),
+          size: tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE,
+          tool,
+        }
+        createAnnotation.mutate({
+          page_number: activeStroke.pageNumber,
+          type: 'ink',
+          color: tool === 'pen' ? penColor : highlighterColor,
+          payload: payload as unknown as Record<string, unknown>,
+        })
+      }
+      setActiveStroke(null)
+
+      if (tool === 'lasso' && lassoPoints && lassoPoints.points.length > 2) {
+        const polygon = lassoPoints.points
+        const ids = pageAnnotations
+          .filter((a) => {
+            const anchor = annotationAnchor(a)
+            return anchor && pointInPolygon(anchor, polygon)
+          })
+          .map((a) => a.id)
+
+        setLassoSelection(ids.length > 0 ? { pageNumber: lassoPoints.pageNumber, ids } : null)
+      }
+      setLassoPoints(null)
+    },
+    [tool, activeStroke, lassoPoints, createAnnotation, penColor, highlighterColor],
+  )
+
+  function deleteLassoSelection() {
+    if (!lassoSelection) return
+    for (const id of lassoSelection.ids) {
+      deleteAnnotation.mutate(id)
+    }
+    setLassoSelection(null)
+  }
+
   if (error) {
     return <p className="p-4 text-sm text-red-400">{error}</p>
   }
 
+  const drawingToolActive = tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'lasso'
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-1 border-b border-slate-800 bg-slate-900/80 px-2 py-1.5">
-        <button
-          type="button"
-          onClick={() => setTool('select')}
-          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-            tool === 'select' ? 'bg-accent/20 text-accent' : 'text-slate-400 hover:text-slate-200'
-          }`}
-        >
+      <div className="flex flex-wrap items-center gap-1 border-b border-slate-800 bg-slate-900/80 px-2 py-1.5">
+        <ToolButton active={tool === 'select'} onClick={() => setTool('select')}>
           Select
-        </button>
-        <button
-          type="button"
-          onClick={() => setTool('comment')}
-          className={`rounded-full px-3 py-1 text-xs font-medium transition-colors ${
-            tool === 'comment' ? 'bg-accent/20 text-accent' : 'text-slate-400 hover:text-slate-200'
-          }`}
-          title="Click anywhere on the page to pin a comment"
-        >
+        </ToolButton>
+        <ToolButton active={tool === 'pen'} onClick={() => setTool('pen')} title="Freehand pen">
+          ✏️ Pen
+        </ToolButton>
+        <ToolButton active={tool === 'highlighter'} onClick={() => setTool('highlighter')} title="Freehand highlighter">
+          🖊️ Highlighter
+        </ToolButton>
+        <ToolButton active={tool === 'lasso'} onClick={() => setTool('lasso')} title="Draw a loop to select annotations">
+          🔗 Lasso
+        </ToolButton>
+        <ToolButton active={tool === 'eraser'} onClick={() => setTool('eraser')} title="Drag over a stroke or highlight to remove it">
+          🧽 Eraser
+        </ToolButton>
+        <ToolButton active={tool === 'comment'} onClick={() => setTool('comment')} title="Click anywhere on the page to pin a comment">
           💬 Comment
-        </button>
+        </ToolButton>
+
+        {tool === 'pen' && (
+          <ColorSwatches colors={PEN_COLORS} active={penColor} onPick={setPenColor} />
+        )}
+        {tool === 'highlighter' && (
+          <ColorSwatches colors={HIGHLIGHTER_COLORS} active={highlighterColor} onPick={setHighlighterColor} />
+        )}
       </div>
 
       <div ref={containerRef} className="relative flex-1 overflow-auto bg-slate-900 p-4">
@@ -289,9 +465,18 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
                 onMouseUp={handleMouseUp}
                 onPageClick={handlePageClick}
                 tool={tool}
+                drawingToolActive={drawingToolActive}
                 annotations={annotationsByPage.get(pageNumber) ?? []}
                 onOpenComment={setOpenComment}
                 onDeleteAnnotation={(id) => deleteAnnotation.mutate(id)}
+                activeStroke={activeStroke?.pageNumber === pageNumber ? activeStroke.points : null}
+                activeStrokeColor={tool === 'pen' ? penColor : highlighterColor}
+                activeStrokeSize={tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE}
+                lassoPoints={lassoPoints?.pageNumber === pageNumber ? lassoPoints.points : null}
+                lassoSelection={lassoSelection?.pageNumber === pageNumber ? lassoSelection.ids : []}
+                onStrokeStart={handleStrokeStart}
+                onStrokeMove={handleStrokeMove}
+                onStrokeEnd={handleStrokeEnd}
               />
             ))}
         </div>
@@ -371,6 +556,26 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
             )
           })()}
 
+        {lassoSelection && (
+          <div className="absolute bottom-4 left-1/2 z-10 flex -translate-x-1/2 items-center gap-3 rounded-full bg-slate-800 px-4 py-2 shadow-lg">
+            <span className="text-xs text-slate-300">{lassoSelection.ids.length} selected</span>
+            <button
+              type="button"
+              onClick={deleteLassoSelection}
+              className="rounded-full bg-red-500/20 px-3 py-1 text-xs font-medium text-red-300 hover:bg-red-500/30"
+            >
+              Delete
+            </button>
+            <button
+              type="button"
+              onClick={() => setLassoSelection(null)}
+              className="text-xs text-slate-400 hover:text-slate-200"
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         {openComment && (
           <div className="absolute inset-0 z-20 flex items-start justify-center bg-black/40 pt-24" onClick={() => setOpenComment(null)}>
             <div
@@ -405,6 +610,57 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   )
 }
 
+function ToolButton({
+  active,
+  onClick,
+  title,
+  children,
+}: {
+  active: boolean
+  onClick: () => void
+  title?: string
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
+        active ? 'scale-105 bg-accent/20 text-accent' : 'text-slate-400 hover:text-slate-200'
+      }`}
+    >
+      {children}
+    </button>
+  )
+}
+
+function ColorSwatches({
+  colors,
+  active,
+  onPick,
+}: {
+  colors: string[]
+  active: string
+  onPick: (color: string) => void
+}) {
+  return (
+    <div className="ml-1 flex items-center gap-1 rounded-full bg-slate-800 px-1.5 py-1">
+      {colors.map((c) => (
+        <button
+          key={c}
+          type="button"
+          onClick={() => onPick(c)}
+          className={`h-5 w-5 rounded-full border-2 transition-transform ${
+            active === c ? 'scale-110 border-white' : 'border-transparent'
+          }`}
+          style={{ backgroundColor: c }}
+        />
+      ))}
+    </div>
+  )
+}
+
 function PdfPage({
   pdfDoc,
   pageNumber,
@@ -412,9 +668,18 @@ function PdfPage({
   onMouseUp,
   onPageClick,
   tool,
+  drawingToolActive,
   annotations,
   onOpenComment,
   onDeleteAnnotation,
+  activeStroke,
+  activeStrokeColor,
+  activeStrokeSize,
+  lassoPoints,
+  lassoSelection,
+  onStrokeStart,
+  onStrokeMove,
+  onStrokeEnd,
 }: {
   pdfDoc: Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>
   pageNumber: number
@@ -422,14 +687,25 @@ function PdfPage({
   onMouseUp: (pageNumber: number, pageEl: HTMLDivElement) => void
   onPageClick: (pageNumber: number, pageEl: HTMLDivElement, e: React.MouseEvent) => void
   tool: AnnotationTool
+  drawingToolActive: boolean
   annotations: Annotation[]
   onOpenComment: (annotation: Annotation) => void
   onDeleteAnnotation: (id: string) => void
+  activeStroke: StrokePoint[] | null
+  activeStrokeColor: string
+  activeStrokeSize: number
+  lassoPoints: StrokePoint[] | null
+  lassoSelection: string[]
+  onStrokeStart: (pageNumber: number, point: StrokePoint) => void
+  onStrokeMove: (pageNumber: number, point: StrokePoint, annotations: Annotation[], pageSize: { width: number; height: number }) => void
+  onStrokeEnd: (annotations: Annotation[]) => void
 }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const textLayerRef = useRef<HTMLDivElement>(null)
+  const svgRef = useRef<SVGSVGElement>(null)
   const [size, setSize] = useState({ width: 0, height: 0 })
+  const isDrawingRef = useRef(false)
 
   useEffect(() => {
     let cancelled = false
@@ -473,10 +749,48 @@ function PdfPage({
     }
   }, [pdfDoc, pageNumber, scale])
 
+  function pointFromEvent(e: React.PointerEvent): StrokePoint {
+    const rect = svgRef.current!.getBoundingClientRect()
+    return {
+      x: (e.clientX - rect.left) / rect.width,
+      y: (e.clientY - rect.top) / rect.height,
+      pressure: e.pressure > 0 ? e.pressure : 0.5,
+    }
+  }
+
+  function handlePointerDown(e: React.PointerEvent) {
+    if (!drawingToolActive) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    isDrawingRef.current = true
+    onStrokeStart(pageNumber, pointFromEvent(e))
+  }
+
+  function handlePointerMove(e: React.PointerEvent) {
+    if (!drawingToolActive || !isDrawingRef.current) return
+    onStrokeMove(pageNumber, pointFromEvent(e), annotations, size)
+  }
+
+  function handlePointerUp() {
+    if (!drawingToolActive || !isDrawingRef.current) return
+    isDrawingRef.current = false
+    onStrokeEnd(annotations)
+  }
+
+  const cursorClass =
+    tool === 'comment'
+      ? 'cursor-crosshair'
+      : tool === 'pen' || tool === 'highlighter'
+        ? 'cursor-crosshair'
+        : tool === 'eraser'
+          ? 'cursor-cell'
+          : tool === 'lasso'
+            ? 'cursor-crosshair'
+            : ''
+
   return (
     <div
       ref={wrapperRef}
-      className={`relative mx-auto bg-white shadow-md ${tool === 'comment' ? 'cursor-crosshair' : ''}`}
+      className={`relative mx-auto bg-white shadow-md ${cursorClass}`}
       onMouseUp={() => wrapperRef.current && onMouseUp(pageNumber, wrapperRef.current)}
       onClick={(e) => wrapperRef.current && onPageClick(pageNumber, wrapperRef.current, e)}
     >
@@ -485,12 +799,18 @@ function PdfPage({
 
       {size.width > 0 && (
         <svg
-          className="pointer-events-none absolute left-0 top-0"
+          ref={svgRef}
+          className={`absolute left-0 top-0 ${drawingToolActive ? 'pointer-events-auto' : 'pointer-events-none'}`}
           width={size.width}
           height={size.height}
           viewBox={`0 0 ${size.width} ${size.height}`}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
         >
           {annotations.map((a) => {
+            const isLassoSelected = lassoSelection.includes(a.id)
+
             if (a.type === 'highlight' || a.type === 'underline') {
               const rects = (a.payload.rects as SourceRect[] | undefined) ?? []
               return rects.map((r, i) => {
@@ -507,10 +827,12 @@ function PdfPage({
                     height={h}
                     fill={a.color ?? HIGHLIGHT_COLOR}
                     opacity={0.35}
+                    stroke={isLassoSelected ? '#38bdf8' : 'none'}
+                    strokeWidth={2}
                     className="pointer-events-auto cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation()
-                      onDeleteAnnotation(a.id)
+                      if (tool === 'select') onDeleteAnnotation(a.id)
                     }}
                   >
                     <title>Click to remove highlight</title>
@@ -526,7 +848,7 @@ function PdfPage({
                     className="pointer-events-auto cursor-pointer"
                     onClick={(e) => {
                       e.stopPropagation()
-                      onDeleteAnnotation(a.id)
+                      if (tool === 'select') onDeleteAnnotation(a.id)
                     }}
                   >
                     <title>Click to remove underline</title>
@@ -545,17 +867,59 @@ function PdfPage({
                   className="pointer-events-auto cursor-pointer"
                   onClick={(e) => {
                     e.stopPropagation()
-                    onOpenComment(a)
+                    if (tool === 'select') onOpenComment(a)
                   }}
                 >
-                  <circle r={8} fill={a.color ?? COMMENT_COLOR} stroke="white" strokeWidth={1.5} />
+                  <circle r={8} fill={a.color ?? COMMENT_COLOR} stroke={isLassoSelected ? '#38bdf8' : 'white'} strokeWidth={isLassoSelected ? 3 : 1.5} />
                   <title>{a.comment_text}</title>
                 </g>
               )
             }
 
+            if (a.type === 'ink') {
+              const payload = a.payload as unknown as InkPayload
+              const path = strokeToSvgPath(payload.points, payload.size, size)
+              return (
+                <path
+                  key={a.id}
+                  d={path}
+                  fill={a.color ?? '#f8fafc'}
+                  opacity={payload.tool === 'highlighter' ? 0.4 : 1}
+                  stroke={isLassoSelected ? '#38bdf8' : 'none'}
+                  strokeWidth={2}
+                  className="pointer-events-auto cursor-pointer"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (tool === 'select') onDeleteAnnotation(a.id)
+                  }}
+                />
+              )
+            }
+
             return null
           })}
+
+          {activeStroke && activeStroke.length > 1 && (
+            <path
+              d={strokeToSvgPath(
+                activeStroke.map((p) => [p.x, p.y, p.pressure]),
+                activeStrokeSize,
+                size,
+              )}
+              fill={activeStrokeColor}
+              opacity={0.7}
+            />
+          )}
+
+          {lassoPoints && lassoPoints.length > 1 && (
+            <polyline
+              points={lassoPoints.map((p) => `${p.x * size.width},${p.y * size.height}`).join(' ')}
+              fill="rgba(56, 189, 248, 0.1)"
+              stroke="#38bdf8"
+              strokeWidth={1.5}
+              strokeDasharray="4 3"
+            />
+          )}
         </svg>
       )}
 

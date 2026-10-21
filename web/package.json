@@ -16,6 +16,7 @@
     "clsx": "^2.1.1",
     "lucide-react": "^1.60.0",
     "pdfjs-dist": "^4.8.69",
+    "perfect-freehand": "^1.2.3",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-hook-form": "^7.90.0",

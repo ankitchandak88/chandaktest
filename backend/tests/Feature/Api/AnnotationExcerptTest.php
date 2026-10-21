@@ -162,6 +162,32 @@ test('deleting an annotation removes it from the list', function () {
     expect(apiGet("/api/v1/documents/{$document->id}/annotations", $headers)->json('data'))->toBeEmpty();
 });
 
+// Annotation/drawing engine, Phase 2: one ink annotation row per stroke
+// (points + pressure + size + which tool drew it), matching perfect-
+// freehand's input shape on both web and mobile so a stroke drawn on one
+// platform round-trips through the same payload the other renders from.
+test('an ink annotation stores one stroke as normalized points with pressure', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $document = createReadyDocument(Project::find($projectId), $user->id);
+
+    $response = apiPost("/api/v1/documents/{$document->id}/annotations", [
+        'page_number' => 1,
+        'type' => 'ink',
+        'color' => '#f8fafc',
+        'payload' => [
+            'points' => [[0.1, 0.1, 0.5], [0.12, 0.12, 0.6], [0.15, 0.14, 0.5]],
+            'size' => 0.004,
+            'tool' => 'pen',
+        ],
+    ], $headers);
+
+    $response->assertCreated();
+    expect($response->json('data.payload.tool'))->toBe('pen');
+    expect($response->json('data.payload.points'))->toHaveCount(3);
+    expect($response->json('data.payload.points.1.2'))->toBe(0.6);
+});
+
 // BE-011
 test('saving an excerpt retains page and coordinates', function () {
     ['headers' => $headers, 'user' => $user] = registerUser();
