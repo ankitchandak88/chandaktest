@@ -251,6 +251,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                           projectId: widget.project.id,
                           excerpts: _excerpts,
                           notes: _notes,
+                          onTagsChanged: _reload,
                         ),
                       ],
                     ),

@@ -127,4 +127,31 @@ class ProjectApi {
       'target_id': targetId,
     });
   }
+
+  // Unpaginated, same precedent as workspace-items/links above.
+  static Future<List<Tag>> listTags(String projectId) async {
+    final response = await _dio.get('/projects/$projectId/tags');
+    return (response.data['data'] as List)
+        .map((e) => Tag.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static Future<Tag> createTag(String projectId, String name) async {
+    final response = await _dio.post('/projects/$projectId/tags', data: {'name': name});
+    return Tag.fromJson(response.data['data'] as Map<String, dynamic>);
+  }
+
+  static Future<void> deleteTag(String tagId) async {
+    await _dio.delete('/tags/$tagId');
+  }
+
+  static Future<List<Tag>> syncExcerptTags(String excerptId, List<String> tagIds) async {
+    final response = await _dio.put('/excerpts/$excerptId/tags', data: {'tag_ids': tagIds});
+    return Excerpt.fromJson(response.data['data'] as Map<String, dynamic>).tags;
+  }
+
+  static Future<List<Tag>> syncNoteTags(String noteId, List<String> tagIds) async {
+    final response = await _dio.put('/notes/$noteId/tags', data: {'tag_ids': tagIds});
+    return ResearchNote.fromJson(response.data['data'] as Map<String, dynamic>).tags;
+  }
 }

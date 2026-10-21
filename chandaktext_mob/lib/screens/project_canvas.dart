@@ -50,11 +50,19 @@ class ProjectCanvas extends StatefulWidget {
     required this.projectId,
     required this.excerpts,
     required this.notes,
+    this.onTagsChanged,
   });
 
   final String projectId;
   final List<Excerpt> excerpts;
   final List<ResearchNote> notes;
+
+  /// Phase 8: tags live on the Excerpt/ResearchNote objects the parent
+  /// (ProjectDetailScreen) owns and fetches - this canvas doesn't have its
+  /// own copy to mutate, so after any tag change it asks the parent to
+  /// reload, which re-fetches excerpts/notes (with fresh tags) and passes
+  /// updated props back down.
+  final VoidCallback? onTagsChanged;
 
   @override
   State<ProjectCanvas> createState() => _ProjectCanvasState();
@@ -66,6 +74,7 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
 
   List<WorkspaceItem> _items = [];
   List<ProjectLink> _links = [];
+  List<Tag> _tags = [];
   bool _loading = true;
   final Map<String, Offset> _positions = {};
   String? _linkSourceItemId;
@@ -88,15 +97,139 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
     setState(() => _loading = true);
     final items = await ProjectApi.listWorkspaceItems(widget.projectId);
     final links = await ProjectApi.listLinks(widget.projectId);
+    final tags = await ProjectApi.listTags(widget.projectId);
     if (!mounted) return;
     setState(() {
       _items = items;
       _links = links;
+      _tags = tags;
       _positions
         ..clear()
         ..addEntries(items.map((i) => MapEntry(i.id, Offset(i.x, i.y))));
       _loading = false;
     });
+  }
+
+  Future<void> _createTag(String name) async {
+    if (name.trim().isEmpty) return;
+    final tag = await ProjectApi.createTag(widget.projectId, name.trim());
+    if (!mounted) return;
+    setState(() => _tags = [..._tags, tag]);
+  }
+
+  Future<void> _deleteTag(Tag tag) async {
+    await ProjectApi.deleteTag(tag.id);
+    if (!mounted) return;
+    setState(() => _tags = _tags.where((t) => t.id != tag.id).toList());
+    widget.onTagsChanged?.call();
+  }
+
+  void _showTagManager() {
+    final controller = TextEditingController();
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return Padding(
+              padding: EdgeInsets.fromLTRB(16, 16, 16, 16 + MediaQuery.of(sheetContext).viewInsets.bottom),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Project tags', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 12),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: controller,
+                          decoration: const InputDecoration(hintText: 'New tag name'),
+                        ),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.add),
+                        onPressed: () async {
+                          final name = controller.text;
+                          controller.clear();
+                          await _createTag(name);
+                          setSheetState(() {});
+                        },
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  if (_tags.isEmpty) const Text('No tags yet.', style: TextStyle(color: Colors.grey)),
+                  Wrap(
+                    spacing: 8,
+                    runSpacing: 4,
+                    children: [
+                      for (final tag in _tags)
+                        Chip(
+                          label: Text(tag.name),
+                          onDeleted: () async {
+                            await _deleteTag(tag);
+                            setSheetState(() {});
+                          },
+                        ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _showTagPicker(_CanvasCard card) {
+    final selected = card.tags.map((t) => t.id).toSet();
+    showModalBottomSheet(
+      context: context,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (sheetContext, setSheetState) {
+            return Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Assign tags', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                  const SizedBox(height: 8),
+                  if (_tags.isEmpty)
+                    const Padding(
+                      padding: EdgeInsets.symmetric(vertical: 8),
+                      child: Text('No project tags yet. Create one from the Tags button above the canvas.'),
+                    ),
+                  for (final tag in _tags)
+                    CheckboxListTile(
+                      title: Text(tag.name),
+                      value: selected.contains(tag.id),
+                      onChanged: (checked) async {
+                        setSheetState(() {
+                          if (checked ?? false) {
+                            selected.add(tag.id);
+                          } else {
+                            selected.remove(tag.id);
+                          }
+                        });
+                        if (card.kind == 'excerpt') {
+                          await ProjectApi.syncExcerptTags(card.targetId, selected.toList());
+                        } else {
+                          await ProjectApi.syncNoteTags(card.targetId, selected.toList());
+                        }
+                      },
+                    ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    ).then((_) => widget.onTagsChanged?.call());
   }
 
   void _scheduleSave(String itemId, Offset pos) {
@@ -173,12 +306,26 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
 
     return Column(
       children: [
-        if (cards.isNotEmpty && _linkSourceItemId == null)
+        if (_linkSourceItemId == null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-            child: Text(
-              'Tap a card to start linking it. Hold and drag to move it.',
-              style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+            child: Row(
+              children: [
+                if (cards.isNotEmpty)
+                  Expanded(
+                    child: Text(
+                      'Tap a card to start linking it. Hold and drag to move it.',
+                      style: TextStyle(fontSize: 11, color: Colors.grey.shade500),
+                    ),
+                  )
+                else
+                  const Spacer(),
+                TextButton.icon(
+                  onPressed: _showTagManager,
+                  icon: const Icon(Icons.label_outline, size: 16),
+                  label: const Text('Tags'),
+                ),
+              ],
             ),
           ),
         if (_linkSourceItemId != null)
@@ -254,12 +401,12 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
           color: Colors.transparent,
           child: SizedBox(
             width: card.item.width,
-            child: _cardContent(card, isLinkSource: false, dragging: true),
+            child: _cardContent(card, isLinkSource: false, dragging: true, showActions: false),
           ),
         ),
         childWhenDragging: Opacity(
           opacity: 0.3,
-          child: _cardContent(card, isLinkSource: isLinkSource, dragging: false),
+          child: _cardContent(card, isLinkSource: isLinkSource, dragging: false, showActions: false),
         ),
         onDragEnd: (details) {
           final stackBox = _stackKey.currentContext?.findRenderObject() as RenderBox?;
@@ -270,13 +417,18 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
         },
         child: GestureDetector(
           onTap: () => _handleCardTap(card),
-          child: _cardContent(card, isLinkSource: isLinkSource, dragging: false),
+          child: _cardContent(card, isLinkSource: isLinkSource, dragging: false, showActions: true),
         ),
       ),
     );
   }
 
-  Widget _cardContent(_CanvasCard card, {required bool isLinkSource, required bool dragging}) {
+  Widget _cardContent(
+    _CanvasCard card, {
+    required bool isLinkSource,
+    required bool dragging,
+    required bool showActions,
+  }) {
     return Container(
       padding: const EdgeInsets.all(10),
       constraints: BoxConstraints(minHeight: card.item.height),
@@ -307,11 +459,12 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
             overflow: TextOverflow.ellipsis,
             style: const TextStyle(fontSize: 13, color: Colors.white),
           ),
-          if (card.tags.isNotEmpty) ...[
+          if (card.tags.isNotEmpty || showActions) ...[
             const SizedBox(height: 4),
             Wrap(
               spacing: 4,
               runSpacing: 2,
+              crossAxisAlignment: WrapCrossAlignment.center,
               children: [
                 for (final tag in card.tags)
                   Container(
@@ -321,6 +474,18 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
                       borderRadius: BorderRadius.circular(10),
                     ),
                     child: Text(tag.name, style: const TextStyle(fontSize: 9, color: Colors.white70)),
+                  ),
+                if (showActions)
+                  GestureDetector(
+                    onTap: () => _showTagPicker(card),
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.grey.shade700),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: const Text('+ tag', style: TextStyle(fontSize: 9, color: Colors.grey)),
+                    ),
                   ),
               ],
             ),
