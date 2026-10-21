@@ -33,7 +33,7 @@ class PdfHighlightOverlayGenerator
     public function generate(Project $project, string $outputPath): void
     {
         $pdf = new Fpdi;
-        $project->loadMissing('documents', 'excerpts', 'notes');
+        $project->loadMissing('documents', 'excerpts', 'notes', 'annotations');
         $anyPages = false;
 
         foreach ($project->documents as $document) {
@@ -71,6 +71,10 @@ class PdfHighlightOverlayGenerator
             ->where('document_id', $document->id)
             ->groupBy('page_number');
 
+        $annotationsByPage = $project->annotations
+            ->where('document_id', $document->id)
+            ->groupBy('page_number');
+
         for ($pageNumber = 1; $pageNumber <= $pageCount; $pageNumber++) {
             $templateId = $pdf->importPage($pageNumber);
             $size = $pdf->getTemplateSize($templateId);
@@ -80,6 +84,10 @@ class PdfHighlightOverlayGenerator
 
             foreach ($excerptsByPage->get($pageNumber, []) as $excerpt) {
                 $this->drawHighlights($pdf, $excerpt->source_rects, $size['width'], $size['height']);
+            }
+
+            foreach ($annotationsByPage->get($pageNumber, []) as $annotation) {
+                $this->drawAnnotation($pdf, $annotation, $size['width'], $size['height']);
             }
         }
     }
@@ -103,6 +111,81 @@ class PdfHighlightOverlayGenerator
                 'D'
             );
         }
+    }
+
+    /**
+     * Annotation/drawing engine, Phase 4: stamps a live highlight/underline/
+     * ink/comment annotation onto the export, same normalized (0-1,
+     * top-left origin) convention as excerpt rects above - a highlight you
+     * made in the app shows up the same way in the exported PDF. Same
+     * outline-not-fill simplification as drawHighlights() for highlight
+     * rects (plain FPDF has no alpha blending); ink strokes are drawn as
+     * straight line segments between consecutive points rather than
+     * perfect-freehand's tapered outline - FPDF has no variable-width path
+     * primitive, and a polyline is a reasonable static-export approximation
+     * of a stroke that's interactive/pressure-sensitive everywhere else.
+     */
+    private function drawAnnotation(Fpdi $pdf, $annotation, float $pageWidth, float $pageHeight): void
+    {
+        [$r, $g, $b] = $this->hexToRgb($annotation->color) ?? self::HIGHLIGHT_COLOR;
+
+        if ($annotation->type === 'highlight' || $annotation->type === 'underline') {
+            $pdf->SetDrawColor($r, $g, $b);
+            $pdf->SetLineWidth(self::HIGHLIGHT_LINE_WIDTH_MM);
+
+            foreach ($annotation->payload['rects'] ?? [] as $rect) {
+                $x = ($rect['x'] ?? 0) * $pageWidth;
+                $y = ($rect['y'] ?? 0) * $pageHeight;
+                $w = ($rect['width'] ?? 0) * $pageWidth;
+                $h = ($rect['height'] ?? 0) * $pageHeight;
+
+                if ($annotation->type === 'highlight') {
+                    $pdf->Rect($x, $y, $w, $h, 'D');
+                } else {
+                    $pdf->Line($x, $y + $h, $x + $w, $y + $h);
+                }
+            }
+        } elseif ($annotation->type === 'ink') {
+            $points = $annotation->payload['points'] ?? [];
+            $strokeSize = (float) ($annotation->payload['size'] ?? 0.004);
+
+            $pdf->SetDrawColor($r, $g, $b);
+            $pdf->SetLineWidth(max($strokeSize * $pageWidth, 0.2));
+
+            for ($i = 1; $i < count($points); $i++) {
+                $pdf->Line(
+                    $points[$i - 1][0] * $pageWidth,
+                    $points[$i - 1][1] * $pageHeight,
+                    $points[$i][0] * $pageWidth,
+                    $points[$i][1] * $pageHeight,
+                );
+            }
+        } elseif ($annotation->type === 'comment') {
+            $x = ($annotation->payload['x'] ?? 0) * $pageWidth;
+            $y = ($annotation->payload['y'] ?? 0) * $pageHeight;
+            $markerSize = 3; // mm - small enough not to obscure text under it.
+
+            $pdf->SetFillColor($r, $g, $b);
+            $pdf->Rect($x - $markerSize / 2, $y - $markerSize / 2, $markerSize, $markerSize, 'F');
+        }
+    }
+
+    private function hexToRgb(?string $hex): ?array
+    {
+        if (! $hex) {
+            return null;
+        }
+
+        $hex = ltrim($hex, '#');
+        if (strlen($hex) !== 6) {
+            return null;
+        }
+
+        return [
+            hexdec(substr($hex, 0, 2)),
+            hexdec(substr($hex, 2, 2)),
+            hexdec(substr($hex, 4, 2)),
+        ];
     }
 
     /**

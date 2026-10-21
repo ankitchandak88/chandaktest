@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Annotation;
 use App\Models\Document;
 use App\Models\Excerpt;
 use App\Models\Note;
@@ -46,6 +47,78 @@ test('stamps excerpt regions onto the original pdf and appends a notes summary p
     // appended notes-summary page.
     $reader = new Fpdi;
     expect($reader->setSourceFile($outputPath))->toBe(2);
+
+    @unlink($outputPath);
+});
+
+// Annotation/drawing engine, Phase 4: a live highlight/underline/ink/
+// comment annotation gets stamped onto the exported pages too, same as an
+// excerpt already was - proves the export doesn't throw/corrupt with every
+// annotation type present, not just that annotations exist in the DB.
+test('highlight, underline, ink, and comment annotations are stamped without error', function () {
+    Storage::fake('local');
+
+    ['user' => $user, 'organization' => $organization] = registerUser();
+    $project = Project::create([
+        'organization_id' => $organization->id,
+        'created_by' => $user->id,
+        'name' => 'Annotation export test',
+    ]);
+
+    $document = createReadyDocument($project, $user->id);
+    Storage::disk('local')->put($document->storage_key, minimalPdfBytes());
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'highlight',
+        'color' => '#facc15',
+        'payload' => ['rects' => [['x' => 0.1, 'y' => 0.1, 'width' => 0.3, 'height' => 0.05]], 'text' => 'hi'],
+    ]);
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'underline',
+        'color' => '#38bdf8',
+        'payload' => ['rects' => [['x' => 0.1, 'y' => 0.2, 'width' => 0.3, 'height' => 0.02]], 'text' => 'hi'],
+    ]);
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'ink',
+        'color' => '#f8fafc',
+        'payload' => ['points' => [[0.1, 0.3, 0.5], [0.2, 0.35, 0.6], [0.3, 0.3, 0.5]], 'size' => 0.004, 'tool' => 'pen'],
+    ]);
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'comment',
+        'color' => '#f472b6',
+        'comment_text' => 'a comment',
+        'payload' => ['x' => 0.5, 'y' => 0.5],
+    ]);
+
+    $outputPath = tempnam(sys_get_temp_dir(), 'overlay-annotation-test');
+
+    app(PdfHighlightOverlayGenerator::class)
+        ->generate($project->fresh(['documents', 'excerpts', 'notes', 'annotations']), $outputPath);
+
+    expect(file_exists($outputPath))->toBeTrue();
+    expect(substr(file_get_contents($outputPath), 0, 5))->toBe('%PDF-');
+
+    $reader = new Fpdi;
+    expect($reader->setSourceFile($outputPath))->toBe(1);
 
     @unlink($outputPath);
 });

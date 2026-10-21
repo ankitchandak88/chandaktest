@@ -45,6 +45,11 @@ class Project extends Model
         return $this->hasMany(Excerpt::class);
     }
 
+    public function annotations(): HasMany
+    {
+        return $this->hasMany(Annotation::class);
+    }
+
     public function workspaceItems(): HasMany
     {
         return $this->hasMany(WorkspaceItem::class);
