@@ -33,6 +33,14 @@ interface InkPayload {
   tool: 'pen' | 'highlighter'
 }
 
+interface OutlineNode {
+  title: string
+  pageNumber: number | null
+  items: OutlineNode[]
+}
+
+type SidePanel = 'none' | 'outline' | 'hilite'
+
 // Shared palette: amber for highlight matches the existing export-time
 // highlight-overlay color (PdfHighlightOverlayGenerator's amber-400), so a
 // highlight looks the same whether you're viewing it live or in an export.
@@ -133,6 +141,8 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   const [lassoPoints, setLassoPoints] = useState<{ pageNumber: number; points: StrokePoint[] } | null>(null)
   const [lassoSelection, setLassoSelection] = useState<{ pageNumber: number; ids: string[] } | null>(null)
   const erasedThisDragRef = useRef<Set<string>>(new Set())
+  const [sidePanel, setSidePanel] = useState<SidePanel>('none')
+  const [outline, setOutline] = useState<OutlineNode[]>([])
 
   const { data: annotations } = useAnnotations(documentId)
   const createAnnotation = useCreateAnnotation(documentId)
@@ -165,6 +175,39 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
         if (!cancelled) {
           setPdfDoc(doc)
           setNumPages(doc.numPages)
+        }
+
+        // Outline (Phase 3): pdf.js's own bookmark/TOC tree. `dest` can be a
+        // named destination (string, needs resolving via getDestination) or
+        // an explicit [ref, ...] array already - either way it resolves to
+        // a page *index* (0-based) via getPageIndex, +1 for this app's
+        // 1-based page_number convention everywhere else.
+        async function resolveDest(dest: string | unknown[] | null): Promise<number | null> {
+          try {
+            const explicit = typeof dest === 'string' ? await doc.getDestination(dest) : dest
+            if (!explicit || !Array.isArray(explicit)) return null
+            const pageIndex = await doc.getPageIndex(explicit[0])
+            return pageIndex + 1
+          } catch {
+            return null
+          }
+        }
+
+        async function resolveOutline(
+          nodes: { title: string; dest: string | unknown[] | null; items: unknown[] }[],
+        ): Promise<OutlineNode[]> {
+          return Promise.all(
+            nodes.map(async (node) => ({
+              title: node.title,
+              pageNumber: await resolveDest(node.dest),
+              items: await resolveOutline(node.items as typeof nodes),
+            })),
+          )
+        }
+
+        const rawOutline = await doc.getOutline()
+        if (!cancelled && rawOutline) {
+          setOutline(await resolveOutline(rawOutline))
         }
       } catch (err) {
         console.error('[PdfViewer] failed to load', err)
@@ -415,6 +458,24 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
     setLassoSelection(null)
   }
 
+  function jumpToPage(pageNumber: number) {
+    containerRef.current
+      ?.querySelector(`[data-page-number="${pageNumber}"]`)
+      ?.scrollIntoView({ block: 'start' })
+  }
+
+  // HiLiteView (Phase 3): every highlight-type annotation across the whole
+  // document, using the text already captured at creation time (see
+  // confirmHighlight) - no reverse rect-to-text mapping needed, no new
+  // backend endpoint.
+  const highlightList = useMemo(
+    () =>
+      (annotations ?? [])
+        .filter((a) => a.type === 'highlight')
+        .sort((a, b) => a.page_number - b.page_number),
+    [annotations],
+  )
+
   if (error) {
     return <p className="p-4 text-sm text-red-400">{error}</p>
   }
@@ -449,7 +510,49 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
         {tool === 'highlighter' && (
           <ColorSwatches colors={HIGHLIGHTER_COLORS} active={highlighterColor} onPick={setHighlighterColor} />
         )}
+
+        <div className="ml-auto flex items-center gap-1">
+          <ToolButton active={sidePanel === 'outline'} onClick={() => setSidePanel((p) => (p === 'outline' ? 'none' : 'outline'))} title="Table of contents">
+            📑 Outline
+          </ToolButton>
+          <ToolButton active={sidePanel === 'hilite'} onClick={() => setSidePanel((p) => (p === 'hilite' ? 'none' : 'hilite'))} title="All highlights in this document">
+            🟨 Highlights
+          </ToolButton>
+        </div>
       </div>
+
+      <div className="relative flex flex-1 overflow-hidden">
+        {sidePanel !== 'none' && (
+          <div className="w-64 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-900 p-3">
+            {sidePanel === 'outline' &&
+              (outline.length === 0 ? (
+                <p className="text-xs text-slate-500">This PDF has no table of contents.</p>
+              ) : (
+                <OutlineList nodes={outline} onJump={jumpToPage} />
+              ))}
+
+            {sidePanel === 'hilite' &&
+              (highlightList.length === 0 ? (
+                <p className="text-xs text-slate-500">No highlights yet - select text and choose Highlight.</p>
+              ) : (
+                <ul className="flex flex-col gap-2">
+                  {highlightList.map((a) => (
+                    <li key={a.id}>
+                      <button
+                        type="button"
+                        onClick={() => jumpToPage(a.page_number)}
+                        className="w-full rounded-md border-l-2 bg-slate-800/60 p-2 text-left text-xs text-slate-200 hover:bg-slate-800"
+                        style={{ borderColor: a.color ?? HIGHLIGHT_COLOR }}
+                      >
+                        <span className="block text-[10px] text-slate-500">Page {a.page_number}</span>
+                        {(a.payload.text as string | undefined) ?? ''}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ))}
+          </div>
+        )}
 
       <div ref={containerRef} className="relative flex-1 overflow-auto bg-slate-900 p-4">
         {!pdfDoc && <p className="text-sm text-slate-400">Loading PDF…</p>}
@@ -605,6 +708,7 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   )
@@ -790,6 +894,7 @@ function PdfPage({
   return (
     <div
       ref={wrapperRef}
+      data-page-number={pageNumber}
       className={`relative mx-auto bg-white shadow-md ${cursorClass}`}
       onMouseUp={() => wrapperRef.current && onMouseUp(pageNumber, wrapperRef.current)}
       onClick={(e) => wrapperRef.current && onPageClick(pageNumber, wrapperRef.current, e)}
@@ -927,5 +1032,25 @@ function PdfPage({
         {pageNumber}
       </div>
     </div>
+  )
+}
+
+function OutlineList({ nodes, onJump, depth = 0 }: { nodes: OutlineNode[]; onJump: (pageNumber: number) => void; depth?: number }) {
+  return (
+    <ul className="flex flex-col gap-0.5" style={{ paddingLeft: depth > 0 ? 12 : 0 }}>
+      {nodes.map((node, i) => (
+        <li key={`${node.title}-${i}`}>
+          <button
+            type="button"
+            disabled={node.pageNumber == null}
+            onClick={() => node.pageNumber != null && onJump(node.pageNumber)}
+            className="w-full truncate rounded px-1.5 py-1 text-left text-xs text-slate-300 hover:bg-slate-800 hover:text-slate-100 disabled:text-slate-600"
+          >
+            {node.title}
+          </button>
+          {node.items.length > 0 && <OutlineList nodes={node.items} onJump={onJump} depth={depth + 1} />}
+        </li>
+      ))}
+    </ul>
   )
 }

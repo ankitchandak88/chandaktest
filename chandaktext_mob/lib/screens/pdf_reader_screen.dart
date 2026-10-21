@@ -24,6 +24,14 @@ const _highlighterColors = [Colors.yellow, Colors.lightGreenAccent, Colors.light
 const _penSize = 0.004;
 const _highlighterSize = 0.016;
 
+class _OutlineNode {
+  _OutlineNode({required this.title, required this.pageNumber, required this.children});
+
+  final String title;
+  final int? pageNumber;
+  final List<_OutlineNode> children;
+}
+
 class PdfReaderScreen extends StatefulWidget {
   const PdfReaderScreen({super.key, required this.document});
 
@@ -51,6 +59,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   // native rendering of highlight/underline/comment (see
   // _renderExistingAnnotation).
   List<model.Annotation> _annotations = [];
+  List<_OutlineNode> _outline = [];
 
   // Maps a live Syncfusion Annotation instance (identity-keyed, these don't
   // override ==) back to our backend row id, so tapping one to delete it can
@@ -93,11 +102,34 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     super.dispose();
   }
 
+  // Outline (Phase 3): the PDF's own embedded bookmark/TOC tree, read via
+  // the lower-level PdfDocument object model (same `_pdfDoc` parsed for
+  // page-size normalization elsewhere in this file) - `bookmark.destination
+  // .page` is a PdfPage object, converted to a 1-based page number via
+  // `pages.indexOf()` + 1 (matches this app's page_number convention
+  // everywhere else).
+  List<_OutlineNode> _buildOutline(pdf.PdfBookmarkBase root) {
+    final nodes = <_OutlineNode>[];
+    for (var i = 0; i < root.count; i++) {
+      final bookmark = root[i];
+      final destinationPage = bookmark.destination?.page;
+      nodes.add(_OutlineNode(
+        title: bookmark.title,
+        pageNumber: destinationPage != null ? _pdfDoc!.pages.indexOf(destinationPage) + 1 : null,
+        children: _buildOutline(bookmark),
+      ));
+    }
+    return nodes;
+  }
+
   Future<void> _loadAnnotations() async {
     final annotations = await ProjectApi.listAnnotations(widget.document.id);
     if (!mounted) return;
 
-    setState(() => _annotations = annotations);
+    setState(() {
+      _annotations = annotations;
+      _outline = _buildOutline(_pdfDoc!.bookmarks);
+    });
 
     for (final a in annotations) {
       if (a.type != 'ink') {
@@ -557,13 +589,93 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     });
   }
 
+  void _showOutlineSheet() {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        expand: false,
+        builder: (sheetContext, scrollController) => ListView(
+          controller: scrollController,
+          padding: const EdgeInsets.all(8),
+          children: _outline
+              .map((n) => _OutlineTile(
+                    node: n,
+                    onJump: (pageNumber) {
+                      Navigator.pop(sheetContext);
+                      _jumpToPage(pageNumber);
+                    },
+                  ))
+              .toList(),
+        ),
+      ),
+    );
+  }
+
+  // HiLiteView (Phase 3): every highlight-type annotation across the whole
+  // document, using the text already captured at creation time - no
+  // reverse rect-to-text mapping, no new backend endpoint.
+  void _showHighlightsSheet() {
+    final highlights = _annotations.where((a) => a.type == 'highlight').toList()
+      ..sort((a, b) => a.pageNumber.compareTo(b.pageNumber));
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (context) => DraggableScrollableSheet(
+        initialChildSize: 0.6,
+        expand: false,
+        builder: (context, scrollController) => highlights.isEmpty
+            ? const Center(child: Text('No highlights yet.'))
+            : ListView.builder(
+                controller: scrollController,
+                padding: const EdgeInsets.all(8),
+                itemCount: highlights.length,
+                itemBuilder: (context, i) {
+                  final a = highlights[i];
+                  return Card(
+                    child: ListTile(
+                      leading: CircleAvatar(backgroundColor: _colorFromHex(a.color) ?? Colors.yellow, radius: 8),
+                      title: Text(a.payload['text'] as String? ?? '', maxLines: 2, overflow: TextOverflow.ellipsis),
+                      subtitle: Text('Page ${a.pageNumber}'),
+                      onTap: () {
+                        Navigator.pop(context);
+                        _jumpToPage(a.pageNumber);
+                      },
+                    ),
+                  );
+                },
+              ),
+      ),
+    );
+  }
+
+  void _jumpToPage(int pageNumber) {
+    _controller.jumpToPage(pageNumber);
+  }
+
   @override
   Widget build(BuildContext context) {
     final hasSelection = _selectedText?.isNotEmpty ?? false;
     final drawingActive = _isDrawingTool(_tool);
 
     return Scaffold(
-      appBar: AppBar(title: Text(widget.document.originalFilename)),
+      appBar: AppBar(
+        title: Text(widget.document.originalFilename),
+        actions: [
+          IconButton(
+            tooltip: 'Table of contents',
+            icon: const Icon(Icons.toc),
+            onPressed: _outline.isEmpty ? null : _showOutlineSheet,
+          ),
+          IconButton(
+            tooltip: 'All highlights',
+            icon: const Icon(Icons.border_color),
+            onPressed: _showHighlightsSheet,
+          ),
+        ],
+      ),
       floatingActionButton: hasSelection
           ? Column(
               mainAxisSize: MainAxisSize.min,
@@ -886,4 +998,38 @@ class _DrawingOverlayPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _DrawingOverlayPainter oldDelegate) => true;
+}
+
+class _OutlineTile extends StatelessWidget {
+  const _OutlineTile({required this.node, required this.onJump});
+
+  final _OutlineNode node;
+  final ValueChanged<int> onJump;
+
+  @override
+  Widget build(BuildContext context) {
+    if (node.children.isEmpty) {
+      return ListTile(
+        title: Text(node.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+        enabled: node.pageNumber != null,
+        onTap: node.pageNumber != null ? () => onJump(node.pageNumber!) : null,
+      );
+    }
+
+    return ExpansionTile(
+      title: Text(node.title, maxLines: 1, overflow: TextOverflow.ellipsis),
+      children: [
+        if (node.pageNumber != null)
+          ListTile(
+            dense: true,
+            title: const Text('Go to section'),
+            onTap: () => onJump(node.pageNumber!),
+          ),
+        ...node.children.map((c) => Padding(
+              padding: const EdgeInsets.only(left: 16),
+              child: _OutlineTile(node: c, onJump: onJump),
+            )),
+      ],
+    );
+  }
 }
