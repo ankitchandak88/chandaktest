@@ -72,6 +72,35 @@ class ProjectApi {
     return response.data!;
   }
 
+  static Future<List<Annotation>> listAnnotations(String documentId) async {
+    final response = await _dio.get('/documents/$documentId/annotations');
+    return (response.data['data'] as List)
+        .map((e) => Annotation.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static Future<Annotation> createAnnotation(
+    String documentId, {
+    required int pageNumber,
+    required String type,
+    String? color,
+    String? commentText,
+    required Map<String, dynamic> payload,
+  }) async {
+    final response = await _dio.post('/documents/$documentId/annotations', data: {
+      'page_number': pageNumber,
+      'type': type,
+      if (color != null) 'color': color,
+      if (commentText != null) 'comment_text': commentText,
+      'payload': payload,
+    });
+    return Annotation.fromJson(response.data['data'] as Map<String, dynamic>);
+  }
+
+  static Future<void> deleteAnnotation(String annotationId) async {
+    await _dio.delete('/annotations/$annotationId');
+  }
+
   static Future<Paginated<Excerpt>> listExcerpts(String projectId, {int page = 1}) async {
     final response = await _dio.get(
       '/projects/$projectId/excerpts',

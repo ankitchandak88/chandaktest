@@ -174,6 +174,41 @@ class Excerpt {
       );
 }
 
+/// Mirrors `backend/app/Models/Annotation.php` - `payload` is deliberately
+/// untyped JSON (same convention the backend uses), since its shape differs
+/// by `type`: highlight/underline carry `{rects: [...], text}` (0-1
+/// normalized, same space as `Excerpt.sourceRects`/web's PdfViewer); comment
+/// carries `{x, y}`; ink (Phase 2) carries `{points, size, tool}`.
+class Annotation {
+  final String id;
+  final String documentId;
+  final int pageNumber;
+  final String type;
+  final String? color;
+  final String? commentText;
+  final Map<String, dynamic> payload;
+
+  Annotation({
+    required this.id,
+    required this.documentId,
+    required this.pageNumber,
+    required this.type,
+    this.color,
+    this.commentText,
+    required this.payload,
+  });
+
+  factory Annotation.fromJson(Map<String, dynamic> json) => Annotation(
+        id: json['id'] as String,
+        documentId: json['document_id'] as String,
+        pageNumber: json['page_number'] as int,
+        type: json['type'] as String,
+        color: json['color'] as String?,
+        commentText: json['comment_text'] as String?,
+        payload: Map<String, dynamic>.from(json['payload'] as Map? ?? {}),
+      );
+}
+
 class ResearchNote {
   final String id;
   final String? title;

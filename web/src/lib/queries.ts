@@ -319,6 +319,18 @@ export function useCreateAnnotation(documentId: string | undefined) {
   })
 }
 
+export function useDeleteAnnotation(documentId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (annotationId: string) => {
+      await api.delete(`/annotations/${annotationId}`)
+    },
+    onSuccess: () =>
+      queryClient.invalidateQueries({ queryKey: ['documents', documentId, 'annotations'] }),
+  })
+}
+
 export function useStartExport(projectId: string | undefined) {
   return useMutation({
     mutationFn: async (format: 'pdf' | 'pdf_highlights' | 'docx' = 'pdf') =>

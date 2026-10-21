@@ -90,6 +90,78 @@ test('a user in a different organization entirely cannot touch the annotation', 
         ->assertStatus(403);
 });
 
+// Annotation/drawing engine, Phase 1: highlight/underline/comment payload
+// conventions (0-1 normalized rects + captured text, matching source_rects)
+test('a highlight annotation stores real rects and captured text, and lists back out', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $document = createReadyDocument(Project::find($projectId), $user->id);
+
+    apiPost("/api/v1/documents/{$document->id}/annotations", [
+        'page_number' => 2,
+        'type' => 'highlight',
+        'color' => '#facc15',
+        'payload' => [
+            'rects' => [['x' => 0.1, 'y' => 0.1, 'width' => 0.5, 'height' => 0.03]],
+            'text' => 'Hello ChandakText World',
+        ],
+    ], $headers)->assertCreated();
+
+    apiPost("/api/v1/documents/{$document->id}/annotations", [
+        'page_number' => 2,
+        'type' => 'underline',
+        'color' => '#38bdf8',
+        'payload' => [
+            'rects' => [['x' => 0.1, 'y' => 0.2, 'width' => 0.3, 'height' => 0.02]],
+            'text' => 'underlined text',
+        ],
+    ], $headers)->assertCreated();
+
+    $list = apiGet("/api/v1/documents/{$document->id}/annotations", $headers)->assertOk();
+    $types = collect($list->json('data'))->pluck('type')->all();
+
+    expect($types)->toContain('highlight');
+    expect($types)->toContain('underline');
+
+    $highlight = collect($list->json('data'))->firstWhere('type', 'highlight');
+    expect($highlight['payload']['text'])->toBe('Hello ChandakText World');
+    expect($highlight['payload']['rects'][0]['width'])->toBe(0.5);
+});
+
+test('a comment annotation stores an anchor point and comment text', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $document = createReadyDocument(Project::find($projectId), $user->id);
+
+    $response = apiPost("/api/v1/documents/{$document->id}/annotations", [
+        'page_number' => 1,
+        'type' => 'comment',
+        'color' => '#f472b6',
+        'comment_text' => 'this needs a citation',
+        'payload' => ['x' => 0.5, 'y' => 0.5],
+    ], $headers);
+
+    $response->assertCreated();
+    expect($response->json('data.comment_text'))->toBe('this needs a citation');
+    expect($response->json('data.payload.x'))->toBe(0.5);
+});
+
+test('deleting an annotation removes it from the list', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $document = createReadyDocument(Project::find($projectId), $user->id);
+
+    $id = apiPost("/api/v1/documents/{$document->id}/annotations", [
+        'page_number' => 1,
+        'type' => 'highlight',
+        'payload' => ['rects' => [['x' => 0, 'y' => 0, 'width' => 1, 'height' => 0.02]]],
+    ], $headers)->json('data.id');
+
+    apiDelete("/api/v1/annotations/{$id}", [], $headers)->assertOk();
+
+    expect(apiGet("/api/v1/documents/{$document->id}/annotations", $headers)->json('data'))->toBeEmpty();
+});
+
 // BE-011
 test('saving an excerpt retains page and coordinates', function () {
     ['headers' => $headers, 'user' => $user] = registerUser();
