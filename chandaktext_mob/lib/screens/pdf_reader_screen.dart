@@ -405,23 +405,31 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
 
   // Maps a point local to the drawing overlay (same size as the viewport,
   // single-page layout mode forced while any drawing tool is active, see
-  // build()) to 0-1 page-normalized coordinates, by computing the same
-  // "fit page within viewport, centered" rect Syncfusion itself renders the
-  // page into. Returns null if the point fell in the letterboxed margin
-  // outside the actual page. NOT YET LIVE-VERIFIED ON A REAL DEVICE as of
-  // writing (see docs/PROGRESS.md) - this is the one piece of this phase
-  // that needs an on-device check before being trusted; the math is
-  // isolated here and in _pageRectInViewport so it's a small, easy place to
-  // recalibrate if a real stroke doesn't land where drawn.
+  // build()) to 0-1 page-normalized coordinates.
+  //
+  // Confirmed via Syncfusion's own source (single_page_view.dart /
+  // pdfviewer.dart's `greyAreaSize`/`heightPercentage` handling - zoomLevel
+  // is hard-floored at 1.0, see `_minScale`) that single-page mode at
+  // zoom=1.0 fits the page to the viewport's *width* exactly (not
+  // width-and-height "contain" - that was this function's original, wrong
+  // assumption): offsetX is always 0, and offsetY is a *centered* grey
+  // margin only when the page is shorter than the viewport at that width-
+  // fit scale. When the page is *taller* than the viewport (common for a
+  // portrait page on a phone screen), Syncfusion allows the user to pan
+  // within it, and that pan offset isn't exposed by any public API - so
+  // this deliberately assumes offsetY=0 (top-aligned, no pan yet) for that
+  // case, which `build()` forces to be true by calling
+  // `_controller.jumpToPage` fresh every time a drawing tool is selected
+  // (jumping to a page resets it to the top). The known, narrow gap this
+  // leaves: panning *within* an overflowing page while a drawing tool is
+  // already active, then drawing, can still misalign - not yet
+  // live-verified on a real device (see docs/PROGRESS.md); recalibrate
+  // here first if a stroke doesn't land under the finger.
   Rect _pageRectInViewport(Size viewport, Size pageSize) {
-    final scale = (viewport.width / pageSize.width < viewport.height / pageSize.height)
-        ? viewport.width / pageSize.width
-        : viewport.height / pageSize.height;
-    final displayedW = pageSize.width * scale;
+    final scale = viewport.width / pageSize.width;
     final displayedH = pageSize.height * scale;
-    final offsetX = (viewport.width - displayedW) / 2;
-    final offsetY = (viewport.height - displayedH) / 2;
-    return Rect.fromLTWH(offsetX, offsetY, displayedW, displayedH);
+    final offsetY = displayedH <= viewport.height ? (viewport.height - displayedH) / 2 : 0.0;
+    return Rect.fromLTWH(0, offsetY, viewport.width, displayedH);
   }
 
   Offset? _localToNormalized(Offset local, Size viewport, int pageNumber) {
@@ -582,11 +590,26 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   void _setTool(_AnnotationTool tool) {
+    final enteringDrawingMode = !_isDrawingTool(_tool) && _isDrawingTool(tool);
+
     setState(() {
       _tool = tool;
       _controller.clearSelection();
       _lassoSelection = null;
     });
+
+    if (enteringDrawingMode) {
+      // _pageRectInViewport assumes the page starts top-aligned (offsetY=0)
+      // when it's taller than the viewport, since Syncfusion's single-page
+      // pan offset isn't readable through any public API - jumping to the
+      // current page (after the widget rebuild below switches to
+      // PdfPageLayoutMode.single) resets it to exactly that state, right
+      // before any drawing can happen.
+      final pageNumber = _controller.pageNumber;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _controller.jumpToPage(pageNumber);
+      });
+    }
   }
 
   void _showOutlineSheet() {
