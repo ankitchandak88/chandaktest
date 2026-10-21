@@ -21,6 +21,7 @@ import {
 import ShareManager from '@/components/ShareManager'
 import { api, apiErrorMessage } from '@/lib/api'
 import { Button, Card, EmptyState, Spinner } from '@/components/ui'
+import AiDocumentPanel from '@/components/AiDocumentPanel'
 import CitationEditor from '@/components/CitationEditor'
 import PdfViewer from '@/components/PdfViewer'
 import WorkspaceCanvas from '@/components/WorkspaceCanvas'
@@ -298,7 +299,12 @@ export default function ProjectWorkspacePage() {
                     <span className="text-red-400">Failed: {doc.failure_reason}</span>
                   )}
                 </p>
-                {doc.status === 'ready' && <CitationEditor projectId={projectId!} document={doc} />}
+                {doc.status === 'ready' && (
+                  <>
+                    <CitationEditor projectId={projectId!} document={doc} />
+                    <AiDocumentPanel projectId={projectId!} document={doc} />
+                  </>
+                )}
               </Card>
             ))}
           </div>

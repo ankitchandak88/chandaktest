@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Api\V1\AiController;
 use App\Http\Controllers\Api\V1\AnnotationController;
 use App\Http\Controllers\Api\V1\AuthController;
 use App\Http\Controllers\Api\V1\BillingController;
@@ -71,6 +72,10 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::get('/documents/{document}', [DocumentController::class, 'show']);
     Route::patch('/documents/{document}', [DocumentController::class, 'update']);
     Route::get('/documents/{document}/pages/{page}', [DocumentController::class, 'page']);
+    Route::post('/documents/{document}/summarize', [AiController::class, 'summarizeDocument'])
+        ->middleware('throttle:ai');
+    Route::post('/documents/{document}/chat', [AiController::class, 'chatAboutDocument'])
+        ->middleware('throttle:ai');
     Route::get('/documents/{document}/download', [DocumentController::class, 'download']);
     Route::delete('/documents/{document}', [DocumentController::class, 'destroy']);
 
@@ -84,12 +89,16 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::patch('/excerpts/{excerpt}', [ExcerptController::class, 'update']);
     Route::delete('/excerpts/{excerpt}', [ExcerptController::class, 'destroy']);
     Route::put('/excerpts/{excerpt}/tags', [ExcerptController::class, 'syncTags']);
+    Route::post('/excerpts/{excerpt}/suggest-tags', [AiController::class, 'suggestExcerptTags'])
+        ->middleware('throttle:ai');
 
     Route::get('/projects/{project}/notes', [NoteController::class, 'index']);
     Route::post('/projects/{project}/notes', [NoteController::class, 'store']);
     Route::patch('/notes/{note}', [NoteController::class, 'update']);
     Route::delete('/notes/{note}', [NoteController::class, 'destroy']);
     Route::put('/notes/{note}/tags', [NoteController::class, 'syncTags']);
+    Route::post('/notes/{note}/suggest-tags', [AiController::class, 'suggestNoteTags'])
+        ->middleware('throttle:ai');
 
     Route::get('/projects/{project}/tags', [TagController::class, 'index']);
     Route::post('/projects/{project}/tags', [TagController::class, 'store']);

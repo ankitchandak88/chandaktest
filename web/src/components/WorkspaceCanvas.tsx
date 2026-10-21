@@ -1,6 +1,13 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Excerpt, Link, Note, Tag, WorkspaceItem } from '@/types/api'
-import { useSaveWorkspaceBatch, useSyncExcerptTags, useSyncNoteTags } from '@/lib/queries'
+import {
+  useCreateTag,
+  useSaveWorkspaceBatch,
+  useSuggestExcerptTags,
+  useSuggestNoteTags,
+  useSyncExcerptTags,
+  useSyncNoteTags,
+} from '@/lib/queries'
 
 interface CanvasCard {
   key: string
@@ -57,8 +64,12 @@ export default function WorkspaceCanvas({
   const saveBatch = useSaveWorkspaceBatch(projectId)
   const syncExcerptTags = useSyncExcerptTags(projectId)
   const syncNoteTags = useSyncNoteTags(projectId)
+  const suggestExcerptTags = useSuggestExcerptTags()
+  const suggestNoteTags = useSuggestNoteTags()
+  const createTag = useCreateTag(projectId)
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [tagMenuFor, setTagMenuFor] = useState<string | null>(null)
+  const [suggestionsFor, setSuggestionsFor] = useState<{ cardKey: string; names: string[] } | null>(null)
   const dragState = useRef<{ itemId: string; offsetX: number; offsetY: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -122,6 +133,25 @@ export default function WorkspaceCanvas({
     } else {
       syncNoteTags.mutate({ noteId: card.targetId, tagIds: nextIds })
     }
+  }
+
+  async function handleSuggestTags(card: CanvasCard) {
+    const names =
+      card.kind === 'excerpt'
+        ? await suggestExcerptTags.mutateAsync(card.targetId)
+        : await suggestNoteTags.mutateAsync(card.targetId)
+
+    setSuggestionsFor({ cardKey: card.key, names })
+  }
+
+  async function acceptSuggestion(card: CanvasCard, name: string) {
+    const existing = tags.find((t) => t.name.toLowerCase() === name.toLowerCase())
+    const tag = existing ?? (await createTag.mutateAsync({ name }))
+
+    toggleTag(card, tag)
+    setSuggestionsFor((prev) =>
+      prev && prev.cardKey === card.key ? { ...prev, names: prev.names.filter((n) => n !== name) } : prev,
+    )
   }
 
   function scheduleSave(itemId: string, x: number, y: number) {
@@ -268,7 +298,49 @@ export default function WorkspaceCanvas({
                 >
                   + tag
                 </button>
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-accent hover:text-accent disabled:opacity-50"
+                  disabled={suggestExcerptTags.isPending || suggestNoteTags.isPending}
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleSuggestTags(card)
+                  }}
+                >
+                  ✨ suggest
+                </button>
               </div>
+
+              {suggestionsFor?.cardKey === card.key && (
+                <div
+                  className="mt-1 flex flex-wrap items-center gap-1 rounded-md border border-slate-700 bg-slate-950 p-1.5"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {suggestionsFor.names.length === 0 ? (
+                    <span className="text-[10px] text-slate-500">No suggestions.</span>
+                  ) : (
+                    suggestionsFor.names.map((name) => (
+                      <button
+                        key={name}
+                        type="button"
+                        className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-200 hover:bg-slate-700"
+                        onClick={() => acceptSuggestion(card, name)}
+                      >
+                        + {name}
+                      </button>
+                    ))
+                  )}
+                  <button
+                    type="button"
+                    className="ml-auto text-[10px] text-slate-500 hover:underline"
+                    onClick={() => setSuggestionsFor(null)}
+                  >
+                    dismiss
+                  </button>
+                </div>
+              )}
 
               {tagMenuFor === card.key && (
                 <div

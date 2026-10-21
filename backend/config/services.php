@@ -47,4 +47,20 @@ return [
         'webhook_secret' => env('RAZORPAY_WEBHOOK_SECRET'),
     ],
 
+    // Section 15 of the implementation brief: provider/privacy/budget was
+    // explicitly left for the user (not Claude) to decide. 'fake' (the
+    // default) needs no key and is what every environment gets until an
+    // admin sets AI_PROVIDER and the matching key below.
+    'ai_provider' => env('AI_PROVIDER', 'fake'),
+
+    'openai' => [
+        'api_key' => env('OPENAI_API_KEY'),
+        'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+    ],
+
+    'anthropic' => [
+        'api_key' => env('ANTHROPIC_API_KEY'),
+        'model' => env('ANTHROPIC_MODEL', 'claude-haiku-4-5'),
+    ],
+
 ];

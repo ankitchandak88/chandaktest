@@ -17,7 +17,7 @@ class Document extends Model
     protected $fillable = [
         'organization_id', 'project_id', 'uploaded_by', 'original_filename',
         'storage_key', 'checksum', 'mime_type', 'size_bytes', 'page_count',
-        'status', 'failure_reason', 'thumbnail_storage_key', 'citation_metadata',
+        'status', 'failure_reason', 'thumbnail_storage_key', 'citation_metadata', 'ai_summary',
     ];
 
     protected $casts = [

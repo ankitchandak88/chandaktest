@@ -365,3 +365,46 @@ export function useRevokeShare(projectId: string | undefined) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'shares'] }),
   })
 }
+
+export function useSummarizeDocument(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ documentId, force }: { documentId: string; force?: boolean }) =>
+      (await api.post<{ data: { summary: string } }>(`/documents/${documentId}/summarize`, { force }))
+        .data.data.summary,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'documents'] }),
+  })
+}
+
+export function useChatWithDocument() {
+  return useMutation({
+    mutationFn: async ({
+      documentId,
+      message,
+      history,
+    }: {
+      documentId: string
+      message: string
+      history: { role: 'user' | 'assistant'; content: string }[]
+    }) =>
+      (await api.post<{ data: { reply: string } }>(`/documents/${documentId}/chat`, { message, history }))
+        .data.data.reply,
+  })
+}
+
+export function useSuggestExcerptTags() {
+  return useMutation({
+    mutationFn: async (excerptId: string) =>
+      (await api.post<{ data: { suggestions: string[] } }>(`/excerpts/${excerptId}/suggest-tags`)).data
+        .data.suggestions,
+  })
+}
+
+export function useSuggestNoteTags() {
+  return useMutation({
+    mutationFn: async (noteId: string) =>
+      (await api.post<{ data: { suggestions: string[] } }>(`/notes/${noteId}/suggest-tags`)).data.data
+        .suggestions,
+  })
+}

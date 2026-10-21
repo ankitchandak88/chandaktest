@@ -35,6 +35,7 @@ export interface Document {
   citation_metadata: CitationMetadata | null
   citation_apa: string | null
   citation_mla: string | null
+  ai_summary: string | null
   created_at: string
   updated_at: string
 }

@@ -78,5 +78,13 @@ class AppServiceProvider extends ServiceProvider
         // (there's no user to key on) to slow down password-guessing and
         // token-scanning against ProjectShareController::show()/content().
         RateLimiter::for('share-access', fn (Request $request) => Limit::perMinute(20)->by($request->ip()));
+
+        // AI endpoints can hit a real, possibly metered/paid provider once
+        // one is configured (see config('services.ai_provider')) - this is
+        // the practical half of the "budget" concern from Section 15 of the
+        // brief: even with a real key set, a single user can't hammer it.
+        RateLimiter::for('ai', fn (Request $request) => Limit::perMinute(15)->by(
+            optional($request->user())->id ?: $request->ip()
+        ));
     }
 }
