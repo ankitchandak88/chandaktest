@@ -278,7 +278,96 @@ owner-can-set-any-role-but-can't-demote-the-last-owner; share links
 default to 7-day expiry, 90-day cap; AI assistant defaults to a
 deterministic 'fake' provider until an admin sets a real one.
 
-## PAUSED HERE — resume point (2026-10-21, session paused ~1hr at user's request)
+## PAUSED HERE — resume point (2026-10-21, later same day — supersedes the
+## "PAUSED HERE" section below; that one's history, not current state)
+
+Since the MILESTONE entry above, the "not done / explicitly deferred" list
+from that milestone got fully worked through as **Phases 8–13** (mobile UI
+for the 7 wow-factor features + the two deferred items), all done, tested,
+and committed:
+
+- **Phase 8 — Mobile tags UI**: tag chips/picker on canvas cards, AI
+  "Suggest" button (accepts a suggestion → creates-if-needed + assigns in
+  one action). **Live-verified on-device** this session (not just
+  `flutter analyze`): suggested "Testing" tag, accepted it, confirmed it
+  persisted to the real DB and re-rendered on the card.
+- **Phase 9 — Mobile citations UI**: `CitationEditor` widget on the
+  document card. **Live-verified**: edited the URL field, saved, APA/MLA
+  text updated live with the new citation.
+- **Phase 10 — Mobile share-links UI**: `ShareManager` bottom sheet
+  (create/list/revoke). **Live-verified**: created a link (list refreshed
+  with the real expiry date), revoked it (list emptied back to "No active
+  share links").
+- **Phase 11 — Mobile AI assistant UI**: `AiDocumentPanel` (summarize +
+  chat) wired into the document card. **Live-verified**: sent a real chat
+  message through the live API, got back the expected `FakeAiProvider`
+  canned response.
+- **Phase 12 — BE-009 fix (non-Latin PDF export)**: replaced the old FPDF
+  `iconv(...//TRANSLIT)` path with `HtmlToPdfRenderer` (mPDF,
+  `autoScriptToLang`/`autoLangToFont`) for both the compiled 'pdf' export
+  and the `pdf_highlights` notes-summary appendix. **Verified three ways**:
+  automated text-extraction tests (conjunct-free Hindi, CJK, Cyrillic exact
+  round-trip; Arabic script-presence check — PDF ToUnicode CMaps don't
+  reliably round-trip conjuncts/contextual shaping even when rendering is
+  correct, so tests are scoped to what extraction can honestly prove), an
+  end-to-end API test, and a **manual visual PDF inspection** (via Claude's
+  native PDF reading) confirming conjunct Hindi, Arabic, and Chinese all
+  render as correct, readable script.
+- **Phase 13 — DOCX export**: `DocxExportGenerator` (PHPWord, built
+  directly against its section/text API rather than reusing the Blade/mPDF
+  HTML pipeline — PHPWord's HTML importer doesn't understand mPDF-specific
+  tags like `<pagebreak />`). Same content scope as the 'pdf' format; no
+  `pdf_highlights`-equivalent (doesn't carry over to a text document). Also
+  fixed two latent bugs this surfaced: both the backend download endpoint
+  and the web download handler hardcoded a `.pdf` filename regardless of
+  actual format. **Verified**: unit tests against the real docx XML (zip
+  archive — PHPWord could silently produce something empty/corrupt), an
+  end-to-end API test, and a **live manual run through the web UI**
+  (selected DOCX in the export dropdown, downloaded, inspected
+  `word/document.xml` directly).
+
+**One real environment bug found and fixed along the way (not app code)**:
+an orphaned `php artisan queue:work` process from a much earlier session
+was still alive in the background with stale in-memory code, silently
+racing the current worker and serving old job results (surfaced as DOCX
+exports failing with the old "not implemented" message even after the fix
+was deployed). Killed it; only the current worker should be running —
+if exports ever seem to run "old" code again, check
+`Get-CimInstance Win32_Process -Filter "Name='php.exe'"` for duplicate
+`queue:work` processes before assuming it's a code bug.
+
+Full backend suite after Phase 13: **101 passed (268 assertions)**. Web
+`tsc --noEmit`: clean.
+
+### Next up — Phases 14–18 (ops/release-prep, not started yet)
+
+User asked for these to be phased too, after confirming testing/smoke-test
+status. **Decisions locked in** (so don't re-ask):
+- Phase 14 error tracking: **Sentry** (`sentry/sentry-laravel`) — wire it
+  config-driven via `.env`, same pattern as `AI_PROVIDER`: works with no
+  DSN set (just doesn't report anywhere), user will supply a real DSN
+  later when they have one. User didn't know what a Sentry DSN was when
+  asked — a short explanation is owed at the start of Phase 14, not just
+  silently assumed knowledge.
+- Phase 15 backup destination: **local disk only** for now (no production
+  hosting/cloud bucket decided yet) — `spatie/laravel-backup`, DB dump +
+  `storage/app`, plus an actual restore drill into a scratch DB (not just
+  "the backup file exists").
+- Phase 18 target stores: **both Google Play and Apple App Store**. This
+  machine has no Mac/Xcode, so iOS-specific steps (archive/signing, App
+  Store Connect setup) can only be prepared as a documented checklist, not
+  executed, until Mac access exists — flag this plainly when Phase 18 is
+  reached rather than silently skipping it.
+
+Phase 16 (deployment checklist) and Phase 17 (mobile device test matrix)
+have no blocking decisions — can start directly.
+
+**Next step on resume**: start Phase 14 (Sentry integration + `/up` health
+check endpoint + structured exception context).
+
+---
+
+## PAUSED HERE — resume point (2026-10-21, session paused ~1hr at user's request) — HISTORY, superseded by the section above
 
 Work since the mobile/emulator pause point below shifted to a **security
 audit + bug-fix pass** driven by `CLAUDE_IMPLEMENTATION_BRIEF_RESEARCH_SAAS.md`
