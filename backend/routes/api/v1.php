@@ -11,6 +11,7 @@ use App\Http\Controllers\Api\V1\NoteController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\ProjectController;
 use App\Http\Controllers\Api\V1\SearchController;
+use App\Http\Controllers\Api\V1\TagController;
 use App\Http\Controllers\Api\V1\UsageController;
 use App\Http\Controllers\Api\V1\WorkspaceItemController;
 use Illuminate\Support\Facades\Route;
@@ -71,11 +72,17 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::post('/projects/{project}/excerpts', [ExcerptController::class, 'store']);
     Route::patch('/excerpts/{excerpt}', [ExcerptController::class, 'update']);
     Route::delete('/excerpts/{excerpt}', [ExcerptController::class, 'destroy']);
+    Route::put('/excerpts/{excerpt}/tags', [ExcerptController::class, 'syncTags']);
 
     Route::get('/projects/{project}/notes', [NoteController::class, 'index']);
     Route::post('/projects/{project}/notes', [NoteController::class, 'store']);
     Route::patch('/notes/{note}', [NoteController::class, 'update']);
     Route::delete('/notes/{note}', [NoteController::class, 'destroy']);
+    Route::put('/notes/{note}/tags', [NoteController::class, 'syncTags']);
+
+    Route::get('/projects/{project}/tags', [TagController::class, 'index']);
+    Route::post('/projects/{project}/tags', [TagController::class, 'store']);
+    Route::delete('/tags/{tag}', [TagController::class, 'destroy']);
 
     Route::get('/projects/{project}/workspace-items', [WorkspaceItemController::class, 'index']);
     Route::post('/projects/{project}/workspace-items', [WorkspaceItemController::class, 'store']);

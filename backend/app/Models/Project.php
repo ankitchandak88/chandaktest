@@ -59,4 +59,9 @@ class Project extends Model
     {
         return $this->hasMany(Export::class);
     }
+
+    public function tags(): HasMany
+    {
+        return $this->hasMany(Tag::class);
+    }
 }

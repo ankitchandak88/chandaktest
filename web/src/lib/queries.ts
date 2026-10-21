@@ -9,6 +9,7 @@ import type {
   Note,
   Paginated,
   Project,
+  Tag,
   UsageSummary,
   WorkspaceItem,
 } from '@/types/api'
@@ -163,6 +164,57 @@ export function useUpdateNote(projectId: string | undefined) {
   return useMutation({
     mutationFn: async ({ id, ...input }: { id: string; title?: string; content?: string }) =>
       (await api.patch<{ data: Note }>(`/notes/${id}`, input)).data.data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'notes'] }),
+  })
+}
+
+export function useTags(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'tags'],
+    queryFn: async () => (await api.get<{ data: Tag[] }>(`/projects/${projectId}/tags`)).data.data,
+    enabled: !!projectId,
+  })
+}
+
+export function useCreateTag(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: { name: string; color?: string }) =>
+      (await api.post<{ data: Tag }>(`/projects/${projectId}/tags`, input)).data.data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'tags'] }),
+  })
+}
+
+export function useDeleteTag(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (tagId: string) => (await api.delete(`/tags/${tagId}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'tags'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'excerpts'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'notes'] })
+    },
+  })
+}
+
+export function useSyncExcerptTags(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ excerptId, tagIds }: { excerptId: string; tagIds: string[] }) =>
+      (await api.put<{ data: Excerpt }>(`/excerpts/${excerptId}/tags`, { tag_ids: tagIds })).data.data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'excerpts'] }),
+  })
+}
+
+export function useSyncNoteTags(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ noteId, tagIds }: { noteId: string; tagIds: string[] }) =>
+      (await api.put<{ data: Note }>(`/notes/${noteId}/tags`, { tag_ids: tagIds })).data.data,
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'notes'] }),
   })
 }

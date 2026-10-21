@@ -4,6 +4,8 @@ import {
   useCreateExcerpt,
   useCreateLink,
   useCreateNote,
+  useCreateTag,
+  useDeleteTag,
   useDocuments,
   useExcerpts,
   useExportStatus,
@@ -12,6 +14,7 @@ import {
   useProject,
   useSaveWorkspaceBatch,
   useStartExport,
+  useTags,
   useUploadDocument,
   useWorkspaceItems,
 } from '@/lib/queries'
@@ -52,6 +55,11 @@ export default function ProjectWorkspacePage() {
   } = useNotes(projectId)
   const { data: workspaceItems } = useWorkspaceItems(projectId)
   const { data: links } = useLinks(projectId)
+  const { data: tags } = useTags(projectId)
+  const createTag = useCreateTag(projectId)
+  const deleteTag = useDeleteTag(projectId)
+  const [newTagName, setNewTagName] = useState('')
+  const [tagError, setTagError] = useState<string | null>(null)
 
   // BUG-006: flatten every loaded page, same pattern as DashboardPage.
   const documents = documentPages?.pages.flatMap((page) => page.data)
@@ -133,6 +141,20 @@ export default function ProjectWorkspacePage() {
       return
     }
     setLinkMode({ sourceType: card.type, sourceId: card.id })
+  }
+
+  async function handleCreateTag(e: FormEvent) {
+    e.preventDefault()
+    const name = newTagName.trim()
+    if (!name) return
+    setTagError(null)
+
+    try {
+      await createTag.mutateAsync({ name })
+      setNewTagName('')
+    } catch (err) {
+      setTagError(apiErrorMessage(err, 'Could not create the tag.'))
+    }
   }
 
   async function handleStartExport() {
@@ -297,6 +319,7 @@ export default function ProjectWorkspacePage() {
               excerpts={excerpts ?? []}
               notes={notes ?? []}
               links={links ?? []}
+              tags={tags ?? []}
               onOpenCard={handleOpenCard}
             />
           </div>
@@ -313,6 +336,43 @@ export default function ProjectWorkspacePage() {
                 Add note
               </Button>
             </form>
+
+            <h2 className="mb-2 text-sm font-medium text-slate-300">Tags</h2>
+            <form onSubmit={handleCreateTag} className="mb-2 flex gap-2">
+              <input
+                value={newTagName}
+                onChange={(e) => setNewTagName(e.target.value)}
+                placeholder="New tag…"
+                className="w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100 placeholder:text-slate-500"
+              />
+              <Button type="submit" variant="secondary" disabled={createTag.isPending}>
+                Add
+              </Button>
+            </form>
+            {tagError && <p className="mb-2 text-xs text-red-400">{tagError}</p>}
+            <div className="mb-6 flex flex-wrap gap-1.5">
+              {(tags ?? []).length === 0 && (
+                <p className="text-xs text-slate-500">
+                  No tags yet. Create one above, then assign it from any card&apos;s "+ tag" button.
+                </p>
+              )}
+              {tags?.map((tag) => (
+                <span
+                  key={tag.id}
+                  className="flex items-center gap-1 rounded-full bg-slate-800 py-0.5 pl-2 pr-1 text-xs text-slate-200"
+                >
+                  {tag.name}
+                  <button
+                    type="button"
+                    className="rounded-full px-1 text-slate-500 hover:text-red-400"
+                    title="Delete tag"
+                    onClick={() => deleteTag.mutate(tag.id)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
 
             {linkMode ? (
               <p className="rounded-md bg-slate-800 p-2 text-xs text-slate-300">

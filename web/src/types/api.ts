@@ -35,6 +35,15 @@ export interface SourceRect {
   height: number
 }
 
+export interface Tag {
+  id: string
+  project_id: string
+  name: string
+  color: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Excerpt {
   id: string
   organization_id: string
@@ -44,6 +53,7 @@ export interface Excerpt {
   page_number: number
   text: string
   source_rects: SourceRect[]
+  tags?: Tag[]
   created_at: string
   updated_at: string
 }
@@ -54,6 +64,7 @@ export interface Note {
   created_by: number
   title: string | null
   content: string | null
+  tags?: Tag[]
   created_at: string
   updated_at: string
 }

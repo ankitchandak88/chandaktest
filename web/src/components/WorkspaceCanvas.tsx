@@ -1,13 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Excerpt, Link, Note, WorkspaceItem } from '@/types/api'
-import { useSaveWorkspaceBatch } from '@/lib/queries'
+import type { Excerpt, Link, Note, Tag, WorkspaceItem } from '@/types/api'
+import { useSaveWorkspaceBatch, useSyncExcerptTags, useSyncNoteTags } from '@/lib/queries'
 
 interface CanvasCard {
   key: string
   item: WorkspaceItem
   kind: 'excerpt' | 'note'
+  targetId: string
   title: string
   body: string
+  tags: Tag[]
 }
 
 interface WorkspaceCanvasProps {
@@ -16,9 +18,22 @@ interface WorkspaceCanvasProps {
   excerpts: Excerpt[]
   notes: Note[]
   links: Link[]
+  tags: Tag[]
   /** Fired on double-clicking any card - used to drive the link-mode flow
    * (both excerpts and notes can be either end of a link). */
   onOpenCard?: (card: { type: 'excerpt' | 'note'; id: string }) => void
+}
+
+// Tags don't require a color up front (PROD-003 kept that optional); a
+// stable hash-based swatch keeps uncolored tags visually distinct from each
+// other instead of all rendering the same default gray.
+const TAG_PALETTE = ['#f87171', '#fb923c', '#facc15', '#4ade80', '#22d3ee', '#818cf8', '#e879f9']
+
+function tagColor(tag: Tag): string {
+  if (tag.color) return tag.color
+  let hash = 0
+  for (let i = 0; i < tag.id.length; i++) hash = (hash * 31 + tag.id.charCodeAt(i)) | 0
+  return TAG_PALETTE[Math.abs(hash) % TAG_PALETTE.length]
 }
 
 /**
@@ -36,10 +51,14 @@ export default function WorkspaceCanvas({
   excerpts,
   notes,
   links,
+  tags,
   onOpenCard,
 }: WorkspaceCanvasProps) {
   const saveBatch = useSaveWorkspaceBatch(projectId)
+  const syncExcerptTags = useSyncExcerptTags(projectId)
+  const syncNoteTags = useSyncNoteTags(projectId)
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
+  const [tagMenuFor, setTagMenuFor] = useState<string | null>(null)
   const dragState = useRef<{ itemId: string; offsetX: number; offsetY: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -68,8 +87,10 @@ export default function WorkspaceCanvas({
             key: item.id,
             item,
             kind: 'excerpt',
+            targetId: excerpt.id,
             title: `Page ${excerpt.page_number}`,
             body: excerpt.text,
+            tags: excerpt.tags ?? [],
           })
         }
       } else {
@@ -79,14 +100,29 @@ export default function WorkspaceCanvas({
             key: item.id,
             item,
             kind: 'note',
+            targetId: note.id,
             title: note.title || 'Note',
             body: note.content ?? '',
+            tags: note.tags ?? [],
           })
         }
       }
     }
     return result
   }, [items, excerpts, notes])
+
+  function toggleTag(card: CanvasCard, tag: Tag) {
+    const currentIds = card.tags.map((t) => t.id)
+    const nextIds = currentIds.includes(tag.id)
+      ? currentIds.filter((id) => id !== tag.id)
+      : [...currentIds, tag.id]
+
+    if (card.kind === 'excerpt') {
+      syncExcerptTags.mutate({ excerptId: card.targetId, tagIds: nextIds })
+    } else {
+      syncNoteTags.mutate({ noteId: card.targetId, tagIds: nextIds })
+    }
+  }
 
   function scheduleSave(itemId: string, x: number, y: number) {
     if (saveTimer.current) clearTimeout(saveTimer.current)
@@ -210,6 +246,61 @@ export default function WorkspaceCanvas({
                 {card.kind === 'excerpt' ? card.title : 'Note'}
               </span>
               <p className="line-clamp-4 select-none text-sm text-slate-200">{card.body}</p>
+
+              <div className="mt-1 flex flex-wrap items-center gap-1">
+                {card.tags.map((tag) => (
+                  <span
+                    key={tag.id}
+                    className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-slate-950"
+                    style={{ backgroundColor: tagColor(tag) }}
+                  >
+                    {tag.name}
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-accent hover:text-accent"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    setTagMenuFor((prev) => (prev === card.key ? null : card.key))
+                  }}
+                >
+                  + tag
+                </button>
+              </div>
+
+              {tagMenuFor === card.key && (
+                <div
+                  className="absolute left-0 top-full z-10 mt-1 w-48 rounded-md border border-slate-700 bg-slate-800 p-2 shadow-xl"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {tags.length === 0 && (
+                    <p className="px-1 py-1 text-xs text-slate-500">No tags yet - add one in the sidebar.</p>
+                  )}
+                  {tags.map((tag) => {
+                    const checked = card.tags.some((t) => t.id === tag.id)
+                    return (
+                      <label
+                        key={tag.id}
+                        className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs text-slate-200 hover:bg-slate-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => toggleTag(card, tag)}
+                        />
+                        <span
+                          className="h-2 w-2 rounded-full"
+                          style={{ backgroundColor: tagColor(tag) }}
+                        />
+                        {tag.name}
+                      </label>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )
         })}

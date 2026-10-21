@@ -7,6 +7,7 @@ use App\Models\Document;
 use App\Models\Excerpt;
 use App\Models\Project;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class ExcerptController extends Controller
 {
@@ -15,7 +16,9 @@ class ExcerptController extends Controller
         $this->authorize('view', $project);
 
         // See DocumentController::index() - not double-wrapped.
-        return response()->json($project->excerpts()->orderByDesc('created_at')->paginate(30));
+        return response()->json(
+            $project->excerpts()->with('tags')->orderByDesc('created_at')->paginate(30)
+        );
     }
 
     public function store(Request $request, Project $project)
@@ -74,5 +77,22 @@ class ExcerptController extends Controller
         $excerpt->delete();
 
         return response()->json(['data' => ['message' => 'Excerpt deleted.']]);
+    }
+
+    public function syncTags(Request $request, Excerpt $excerpt)
+    {
+        $this->authorize('update', $excerpt);
+
+        $data = $request->validate([
+            'tag_ids' => ['present', 'array'],
+            'tag_ids.*' => [
+                'uuid',
+                Rule::exists('tags', 'id')->where('project_id', $excerpt->project_id),
+            ],
+        ]);
+
+        $excerpt->syncTags($data['tag_ids']);
+
+        return response()->json(['data' => $excerpt->load('tags')]);
     }
 }

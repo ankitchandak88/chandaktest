@@ -6,6 +6,7 @@ use App\Http\Controllers\Controller;
 use App\Models\Note;
 use App\Models\Project;
 use Illuminate\Http\Request;
+use Illuminate\Validation\Rule;
 
 class NoteController extends Controller
 {
@@ -14,7 +15,9 @@ class NoteController extends Controller
         $this->authorize('view', $project);
 
         // See DocumentController::index() - not double-wrapped.
-        return response()->json($project->notes()->orderByDesc('created_at')->paginate(30));
+        return response()->json(
+            $project->notes()->with('tags')->orderByDesc('created_at')->paginate(30)
+        );
     }
 
     public function store(Request $request, Project $project)
@@ -57,5 +60,22 @@ class NoteController extends Controller
         $note->delete();
 
         return response()->json(['data' => ['message' => 'Note deleted.']]);
+    }
+
+    public function syncTags(Request $request, Note $note)
+    {
+        $this->authorize('update', $note);
+
+        $data = $request->validate([
+            'tag_ids' => ['present', 'array'],
+            'tag_ids.*' => [
+                'uuid',
+                Rule::exists('tags', 'id')->where('project_id', $note->project_id),
+            ],
+        ]);
+
+        $note->syncTags($data['tag_ids']);
+
+        return response()->json(['data' => $note->load('tags')]);
     }
 }

@@ -117,6 +117,13 @@ function apiPatch(string $uri, array $data = [], array $headers = []): TestRespo
     return test()->patchJson($uri, $data, $headers);
 }
 
+function apiPut(string $uri, array $data = [], array $headers = []): TestResponse
+{
+    auth()->forgetGuards();
+
+    return test()->putJson($uri, $data, $headers);
+}
+
 function apiDelete(string $uri, array $data = [], array $headers = []): TestResponse
 {
     auth()->forgetGuards();

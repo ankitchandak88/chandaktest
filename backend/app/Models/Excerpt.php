@@ -3,6 +3,7 @@
 namespace App\Models;
 
 use App\Models\Concerns\CleansUpWorkspaceReferences;
+use App\Models\Concerns\Taggable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
@@ -11,7 +12,7 @@ use Illuminate\Database\Eloquent\SoftDeletes;
 
 class Excerpt extends Model
 {
-    use CleansUpWorkspaceReferences, HasFactory, HasUuids, SoftDeletes;
+    use CleansUpWorkspaceReferences, HasFactory, HasUuids, SoftDeletes, Taggable;
 
     protected $fillable = [
         'organization_id', 'project_id', 'document_id', 'created_by',
