@@ -49,6 +49,27 @@ test('search results never leak across tenants', function () {
     )->assertOk();
 });
 
+// BE-007 / REG-016
+test('search validation matches what MySQL FULLTEXT can actually index', function () {
+    ['headers' => $headers] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+
+    // This server's innodb_ft_min_token_size is 3 (verified via SHOW
+    // VARIABLES, see SearchController) - a 2-character term is never
+    // indexed at all, so it's rejected up front with a clear error rather
+    // than silently returning zero results.
+    apiGet("/api/v1/search?project_id={$projectId}&q=AI", $headers)
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('q');
+
+    apiGet("/api/v1/search?project_id={$projectId}&q=ML", $headers)->assertStatus(422);
+
+    // A 3+ character term passes validation (the actual match behavior
+    // against committed data is covered by the test above and was verified
+    // separately via curl - see its comment for why).
+    apiGet("/api/v1/search?project_id={$projectId}&q=law", $headers)->assertOk();
+});
+
 // BE-014
 test('an export job produces a ready, downloadable PDF', function () {
     ['headers' => $headers, 'user' => $user] = registerUser();

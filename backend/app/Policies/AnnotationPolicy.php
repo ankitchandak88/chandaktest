@@ -22,7 +22,11 @@ class AnnotationPolicy
 
     public function update(User $user, Annotation $annotation): bool
     {
-        return $annotation->created_by === $user->id || $this->canEditProject($user, $annotation->project);
+        // SEC-001 fix - see ExcerptPolicy::update() for the full explanation:
+        // active project access is now a mandatory prerequisite, not an
+        // alternative to the creator check.
+        return $this->canViewProject($user, $annotation->project)
+            && ($annotation->created_by === $user->id || $this->canEditProject($user, $annotation->project));
     }
 
     public function delete(User $user, Annotation $annotation): bool

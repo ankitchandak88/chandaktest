@@ -44,8 +44,10 @@ Route::middleware('auth:sanctum')->group(function () {
 Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::get('/organizations/current', [OrganizationController::class, 'show']);
     Route::get('/organizations/current/members', [OrganizationController::class, 'members']);
-    Route::post('/organizations/current/members', [OrganizationController::class, 'addMember']);
-    Route::delete('/organizations/members/{membership}', [OrganizationController::class, 'removeMember']);
+    Route::post('/organizations/current/members', [OrganizationController::class, 'addMember'])
+        ->middleware('throttle:member-management');
+    Route::delete('/organizations/members/{membership}', [OrganizationController::class, 'removeMember'])
+        ->middleware('throttle:member-management');
 
     Route::get('/projects', [ProjectController::class, 'index']);
     Route::post('/projects', [ProjectController::class, 'store']);

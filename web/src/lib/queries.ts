@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type {
   Annotation,
@@ -13,10 +13,22 @@ import type {
   WorkspaceItem,
 } from '@/types/api'
 
+/**
+ * BUG-006 fix: the backend has always paginated this endpoint (20 per
+ * page); the frontend used to read only `.data.data` with no way to reach
+ * a second page, so a user's 21st+ project was simply invisible with no
+ * indication more existed. useInfiniteQuery + a "Load more" button (see
+ * DashboardPage) is the fix, applied the same way to documents/excerpts/
+ * notes below - anywhere the backend paginates.
+ */
 export function useProjects() {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['projects'],
-    queryFn: async () => (await api.get<Paginated<Project>>('/projects')).data.data,
+    queryFn: async ({ pageParam }) =>
+      (await api.get<Paginated<Project>>('/projects', { params: { page: pageParam } })).data,
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
   })
 }
 
@@ -49,16 +61,24 @@ export function useProject(projectId: string | undefined) {
 }
 
 export function useDocuments(projectId: string | undefined) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['projects', projectId, 'documents'],
-    queryFn: async () =>
-      (await api.get<Paginated<Document>>(`/projects/${projectId}/documents`)).data.data,
+    queryFn: async ({ pageParam }) =>
+      (
+        await api.get<Paginated<Document>>(`/projects/${projectId}/documents`, {
+          params: { page: pageParam },
+        })
+      ).data,
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
     enabled: !!projectId,
     // Documents move processing -> ready/failed in the background; poll
-    // gently while any are still processing.
+    // gently while any (on the currently-loaded pages) are still processing.
     refetchInterval: (query) => {
-      const docs = query.state.data as Document[] | undefined
-      return docs?.some((d) => d.status === 'processing') ? 2500 : false
+      const pages = query.state.data?.pages as Paginated<Document>[] | undefined
+      const anyProcessing = pages?.some((p) => p.data.some((d) => d.status === 'processing'))
+      return anyProcessing ? 2500 : false
     },
   })
 }
@@ -84,10 +104,17 @@ export function useUploadDocument(projectId: string | undefined) {
 }
 
 export function useExcerpts(projectId: string | undefined) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['projects', projectId, 'excerpts'],
-    queryFn: async () =>
-      (await api.get<Paginated<Excerpt>>(`/projects/${projectId}/excerpts`)).data.data,
+    queryFn: async ({ pageParam }) =>
+      (
+        await api.get<Paginated<Excerpt>>(`/projects/${projectId}/excerpts`, {
+          params: { page: pageParam },
+        })
+      ).data,
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
     enabled: !!projectId,
   })
 }
@@ -107,9 +134,15 @@ export function useCreateExcerpt(projectId: string | undefined) {
 }
 
 export function useNotes(projectId: string | undefined) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ['projects', projectId, 'notes'],
-    queryFn: async () => (await api.get<Paginated<Note>>(`/projects/${projectId}/notes`)).data.data,
+    queryFn: async ({ pageParam }) =>
+      (
+        await api.get<Paginated<Note>>(`/projects/${projectId}/notes`, { params: { page: pageParam } })
+      ).data,
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) =>
+      lastPage.meta.current_page < lastPage.meta.last_page ? lastPage.meta.current_page + 1 : undefined,
     enabled: !!projectId,
   })
 }

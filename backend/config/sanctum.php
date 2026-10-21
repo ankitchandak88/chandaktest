@@ -50,7 +50,16 @@ return [
     |
     */
 
-    'expiration' => null,
+    // SEC-006: a never-expiring token means a stolen/leaked token is valid
+    // forever. This app is pure bearer-token auth for both web and mobile
+    // (no cookie/session model at all), so a global expiration here is the
+    // only session-lifetime control that exists - 30 days by default,
+    // which keeps a logged-in web/mobile session reasonably long-lived
+    // without being indefinite. Override via SANCTUM_TOKEN_EXPIRATION_MINUTES
+    // if a shorter/longer lifetime is wanted; there's no separate
+    // "remember me" or refresh-token flow yet, so a user just logs in again
+    // once their token expires.
+    'expiration' => env('SANCTUM_TOKEN_EXPIRATION_MINUTES', 60 * 24 * 30),
 
     /*
     |--------------------------------------------------------------------------

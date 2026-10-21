@@ -21,9 +21,20 @@ class SearchController extends Controller
      */
     public function index(Request $request)
     {
+        // BE-007: validation must match what MySQL can actually index, not
+        // just what seems reasonable. This server's innodb_ft_min_token_size
+        // is 3 (confirmed via `SHOW VARIABLES`, not assumed) - a 2-character
+        // term like "AI"/"ML"/"UI" is never added to a FULLTEXT index in the
+        // first place, so `min:2` validation let through searches that
+        // could silently never match anything. min:3 is a real product
+        // behavior change (very short acronyms are unsearchable) rather
+        // than a cosmetic validation tweak; raising
+        // innodb_ft_min_token_size itself would require rebuilding every
+        // FULLTEXT index and a server-config change, which is a deployment
+        // decision, not something to do silently from application code.
         $data = $request->validate([
             'project_id' => ['required', 'uuid', 'exists:projects,id'],
-            'q' => ['required', 'string', 'min:2', 'max:200'],
+            'q' => ['required', 'string', 'min:3', 'max:200'],
         ]);
 
         $project = Project::findOrFail($data['project_id']);

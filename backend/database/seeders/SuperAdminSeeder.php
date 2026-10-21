@@ -18,15 +18,17 @@ class SuperAdminSeeder extends Seeder
         $email = env('SUPER_ADMIN_EMAIL', 'admin@chandaktext.test');
         $password = env('SUPER_ADMIN_PASSWORD', 'password');
 
-        User::updateOrCreate(
+        // updateOrCreate() mass-assigns, and is_super_admin is deliberately
+        // excluded from $fillable (SEC-005) - set it explicitly afterwards.
+        $user = User::updateOrCreate(
             ['email' => $email],
             [
                 'name' => 'Super Admin',
                 'password' => Hash::make($password),
-                'is_super_admin' => true,
                 'email_verified_at' => now(),
             ]
         );
+        $user->forceFill(['is_super_admin' => true])->save();
 
         $this->command?->info("Super admin ready: {$email}");
     }

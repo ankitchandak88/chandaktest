@@ -57,7 +57,21 @@ class DocumentController extends Controller
             $file->getSize(),
             function () use ($file, $project, $organization, $request) {
                 $storageKey = 'documents/'.$organization->id.'/'.Str::uuid().'.pdf';
-                Storage::disk('local')->put($storageKey, file_get_contents($file->getRealPath()));
+
+                // SEC-002 fix: stream from disk to disk via a file handle
+                // rather than file_get_contents(), which read the entire
+                // (up to 100MB) upload into one PHP string before storing
+                // it - a needless memory spike per upload, worse under
+                // concurrent uploads.
+                $stream = fopen($file->getRealPath(), 'r');
+
+                try {
+                    Storage::disk('local')->put($storageKey, $stream);
+                } finally {
+                    if (is_resource($stream)) {
+                        fclose($stream);
+                    }
+                }
 
                 return Document::create([
                     'organization_id' => $organization->id,
@@ -112,11 +126,20 @@ class DocumentController extends Controller
         return Storage::disk('local')->download($document->storage_key, $document->original_filename);
     }
 
+    /**
+     * BUG-003 fix: this used to delete the physical file immediately while
+     * only soft-deleting the database row - so a "restored" document would
+     * have no file left, and (separately) its excerpts/annotations stayed
+     * fully active (see Document::booted() for that half of the fix). The
+     * file now survives the retention window
+     * (config('documents.retention_days')) so an accidental delete is
+     * actually recoverable; permanent removal happens later in
+     * PurgeSoftDeletedDocuments.
+     */
     public function destroy(Request $request, Document $document)
     {
         $this->authorize('delete', $document);
 
-        Storage::disk('local')->delete($document->storage_key);
         $document->delete();
 
         $this->auditLogger->logRequest($request, 'document.deleted', 'document', $document->id);

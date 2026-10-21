@@ -16,9 +16,9 @@ test('the super admin can load every admin resource page', function () {
         'name' => 'Admin',
         'email' => 'panel-admin@example.test',
         'password' => Hash::make('Password123!'),
-        'is_super_admin' => true,
-        'email_verified_at' => now(),
     ]);
+    // is_super_admin is deliberately outside $fillable (SEC-005).
+    $admin->forceFill(['is_super_admin' => true, 'email_verified_at' => now()])->save();
 
     $pages = [
         '/admin',

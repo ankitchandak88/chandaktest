@@ -15,7 +15,7 @@ import {
   useUploadDocument,
   useWorkspaceItems,
 } from '@/lib/queries'
-import { apiErrorMessage } from '@/lib/api'
+import { api, apiErrorMessage } from '@/lib/api'
 import { Button, Card, EmptyState, Spinner } from '@/components/ui'
 import PdfViewer from '@/components/PdfViewer'
 import WorkspaceCanvas from '@/components/WorkspaceCanvas'
@@ -31,11 +31,32 @@ export default function ProjectWorkspacePage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const { data: project } = useProject(projectId)
-  const { data: documents, isLoading: loadingDocs } = useDocuments(projectId)
-  const { data: excerpts } = useExcerpts(projectId)
-  const { data: notes } = useNotes(projectId)
+  const {
+    data: documentPages,
+    isLoading: loadingDocs,
+    fetchNextPage: fetchMoreDocuments,
+    hasNextPage: hasMoreDocuments,
+    isFetchingNextPage: fetchingMoreDocuments,
+  } = useDocuments(projectId)
+  const {
+    data: excerptPages,
+    fetchNextPage: fetchMoreExcerpts,
+    hasNextPage: hasMoreExcerpts,
+    isFetchingNextPage: fetchingMoreExcerpts,
+  } = useExcerpts(projectId)
+  const {
+    data: notePages,
+    fetchNextPage: fetchMoreNotes,
+    hasNextPage: hasMoreNotes,
+    isFetchingNextPage: fetchingMoreNotes,
+  } = useNotes(projectId)
   const { data: workspaceItems } = useWorkspaceItems(projectId)
   const { data: links } = useLinks(projectId)
+
+  // BUG-006: flatten every loaded page, same pattern as DashboardPage.
+  const documents = documentPages?.pages.flatMap((page) => page.data)
+  const excerpts = excerptPages?.pages.flatMap((page) => page.data)
+  const notes = notePages?.pages.flatMap((page) => page.data)
 
   const uploadDocument = useUploadDocument(projectId)
   const createExcerpt = useCreateExcerpt(projectId)
@@ -119,6 +140,41 @@ export default function ProjectWorkspacePage() {
     setExportId(job.id)
   }
 
+  const [downloading, setDownloading] = useState(false)
+  const [downloadError, setDownloadError] = useState<string | null>(null)
+
+  /**
+   * BUG-001 fix: a plain `<a href=API_URL target="_blank">` cannot carry the
+   * app's Authorization/X-Organization-Id headers - a browser navigation is
+   * an unauthenticated request as far as this API is concerned, so it would
+   * 401. Fetching through the authenticated axios client as a blob and
+   * handing the browser an object URL (revoked right after) is the correct
+   * way to trigger a download for a bearer-token API.
+   */
+  async function handleDownloadExport(exportId: string) {
+    setDownloading(true)
+    setDownloadError(null)
+
+    let objectUrl: string | null = null
+
+    try {
+      const response = await api.get(`/exports/${exportId}/download`, { responseType: 'blob' })
+      objectUrl = URL.createObjectURL(response.data)
+
+      const link = document.createElement('a')
+      link.href = objectUrl
+      link.download = `${project?.name ?? 'export'}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+    } catch (err) {
+      setDownloadError(apiErrorMessage(err, 'Could not download the export.'))
+    } finally {
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+      setDownloading(false)
+    }
+  }
+
   return (
     <div className="flex h-[calc(100vh-56px)] flex-col">
       <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2">
@@ -154,19 +210,19 @@ export default function ProjectWorkspacePage() {
       {exportJob && (
         <div className="border-b border-slate-800 bg-slate-900 px-4 py-2 text-sm">
           {exportJob.status === 'ready' ? (
-            <a
-              className="text-accent hover:underline"
-              href={`${import.meta.env.VITE_API_URL ?? 'http://127.0.0.1:8123/api/v1'}/exports/${exportJob.id}/download`}
-              target="_blank"
-              rel="noreferrer"
+            <button
+              className="text-accent hover:underline disabled:opacity-50"
+              onClick={() => handleDownloadExport(exportJob.id)}
+              disabled={downloading}
             >
-              Export ready — download PDF
-            </a>
+              {downloading ? 'Downloading…' : 'Export ready — download PDF'}
+            </button>
           ) : exportJob.status === 'failed' ? (
             <span className="text-red-400">Export failed: {exportJob.failure_reason}</span>
           ) : (
             <span className="text-slate-400">Export {exportJob.status}…</span>
           )}
+          {downloadError && <span className="ml-3 text-red-400">{downloadError}</span>}
         </div>
       )}
 
@@ -211,6 +267,18 @@ export default function ProjectWorkspacePage() {
               </Card>
             ))}
           </div>
+
+          {hasMoreDocuments && (
+            <div className="mt-4 flex justify-center">
+              <Button
+                variant="secondary"
+                onClick={() => fetchMoreDocuments()}
+                disabled={fetchingMoreDocuments}
+              >
+                {fetchingMoreDocuments ? 'Loading…' : 'Load more documents'}
+              </Button>
+            </div>
+          )}
 
           {activeDocument && (
             <div className="mt-4 h-[70vh] overflow-hidden rounded-lg border border-slate-800">
@@ -258,6 +326,31 @@ export default function ProjectWorkspacePage() {
               <p className="text-xs text-slate-500">
                 Double-click any card on the canvas to start linking it to another.
               </p>
+            )}
+
+            {(hasMoreExcerpts || hasMoreNotes) && (
+              <div className="mt-6 space-y-2">
+                {hasMoreExcerpts && (
+                  <Button
+                    variant="secondary"
+                    className="w-full"
+                    onClick={() => fetchMoreExcerpts()}
+                    disabled={fetchingMoreExcerpts}
+                  >
+                    {fetchingMoreExcerpts ? 'Loading…' : 'Load more excerpts'}
+                  </Button>
+                )}
+                {hasMoreNotes && (
+                  <Button
+                    variant="secondary"
+                    className="w-full"
+                    onClick={() => fetchMoreNotes()}
+                    disabled={fetchingMoreNotes}
+                  >
+                    {fetchingMoreNotes ? 'Loading…' : 'Load more notes'}
+                  </Button>
+                )}
+              </div>
             )}
           </aside>
         </div>

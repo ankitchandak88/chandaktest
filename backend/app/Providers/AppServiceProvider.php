@@ -61,5 +61,17 @@ class AppServiceProvider extends ServiceProvider
         ));
 
         RateLimiter::for('webhooks', fn (Request $request) => Limit::perMinute(120)->by($request->ip()));
+
+        // SEC-003: addMember()'s "no account with that email exists yet"
+        // response is deliberately informative for a legitimate owner, but
+        // that same owner's account could otherwise be used to enumerate
+        // arbitrary emails quickly. This is already gated to authorized
+        // organization owners (not an anonymous/public endpoint), so the
+        // realistic risk is an authenticated member abusing their own
+        // access rather than open enumeration - rate limiting it is
+        // defense in depth on top of that gating, not a replacement for it.
+        RateLimiter::for('member-management', fn (Request $request) => Limit::perMinute(10)->by(
+            optional($request->user())->id ?: $request->ip()
+        ));
     }
 }

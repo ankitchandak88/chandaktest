@@ -22,7 +22,11 @@ class NotePolicy
 
     public function update(User $user, Note $note): bool
     {
-        return $note->created_by === $user->id || $this->canEditProject($user, $note->project);
+        // SEC-001 fix - see ExcerptPolicy::update() for the full explanation:
+        // active project access is now a mandatory prerequisite, not an
+        // alternative to the creator check.
+        return $this->canViewProject($user, $note->project)
+            && ($note->created_by === $user->id || $this->canEditProject($user, $note->project));
     }
 
     public function delete(User $user, Note $note): bool

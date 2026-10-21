@@ -96,13 +96,53 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
 
     const first = clientRects[0]
 
+    // BUG-002 fix: the popup used to render at a hardcoded {left:32, top:32}
+    // regardless of where the selection actually was. `first`/`pageRect` are
+    // viewport-relative (getBoundingClientRect), but the popup is an
+    // absolutely-positioned child of the *scrollable* containerRef, where
+    // top/left mean "pixels from the top of the scrollable content", not
+    // "pixels from the visible viewport". Converting through
+    // containerRef's own rect + its current scroll offset gives a position
+    // that's correct both right now and if the container is scrolled
+    // further (the content coordinate doesn't change, only what's visible
+    // does).
+    const container = containerRef.current
+    let anchorX = first.left - pageRect.left
+    let anchorY = first.top - pageRect.top
+
+    if (container) {
+      const containerRect = container.getBoundingClientRect()
+      anchorX += pageRect.left - containerRect.left + container.scrollLeft
+      anchorY += pageRect.top - containerRect.top + container.scrollTop
+    }
+
     setSelection({
       pageNumber,
       text,
       rects,
-      anchor: { x: first.left - pageRect.left, y: first.top - pageRect.top },
+      anchor: { x: anchorX, y: anchorY },
     })
   }, [])
+
+  // Scroll/resize invalidates the popup's anchor coordinates (BUG-002:
+  // "reposition after scroll/resize"). Re-deriving the exact position live
+  // would mean re-walking the selection geometry on every scroll event;
+  // dismissing the popup instead is simpler and never shows it in the wrong
+  // place - the user just re-selects, which also re-confirms the text is
+  // still what they meant to save.
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !selection) return
+
+    const dismiss = () => setSelection(null)
+    container.addEventListener('scroll', dismiss)
+    window.addEventListener('resize', dismiss)
+
+    return () => {
+      container.removeEventListener('scroll', dismiss)
+      window.removeEventListener('resize', dismiss)
+    }
+  }, [selection])
 
   function confirmExcerpt() {
     if (!selection) return
@@ -132,16 +172,28 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
           ))}
       </div>
 
-      {selection && (
-        <div
-          className="absolute z-10 -translate-y-full rounded-md bg-slate-800 p-1 shadow-lg"
-          style={{ left: 32, top: 32 }}
-        >
-          <Button onClick={confirmExcerpt} className="text-xs">
-            Save selection as excerpt
-          </Button>
-        </div>
-      )}
+      {selection &&
+        (() => {
+          // Clamp within the visible container so the popup never renders
+          // partially off-screen for a selection near an edge.
+          const containerWidth = containerRef.current?.clientWidth ?? 0
+          const popupWidthEstimate = 200
+          const left = containerWidth
+            ? Math.min(Math.max(selection.anchor.x, 8), Math.max(containerWidth - popupWidthEstimate, 8))
+            : selection.anchor.x
+          const top = Math.max(selection.anchor.y - 8, 8)
+
+          return (
+            <div
+              className="absolute z-10 -translate-y-full rounded-md bg-slate-800 p-1 shadow-lg"
+              style={{ left, top }}
+            >
+              <Button onClick={confirmExcerpt} className="text-xs">
+                Save selection as excerpt
+              </Button>
+            </div>
+          )
+        })()}
     </div>
   )
 }

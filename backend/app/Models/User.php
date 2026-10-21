@@ -23,14 +23,20 @@ class User extends Authenticatable implements FilamentUser, MustVerifyEmail
      *
      * @var list<string>
      */
+    /**
+     * SEC-005: `is_super_admin`/`status`/`suspended_*` are deliberately NOT
+     * mass-assignable. These are administrative/security-sensitive fields -
+     * nothing resembling `$user->update($request->all())` or a careless
+     * `$request->only([...])` should ever be able to touch them. The three
+     * legitimate call sites (SuperAdminSeeder, and the suspend/restore
+     * actions in Filament's UserResource) use `forceFill()` explicitly
+     * instead, which is the correct way to signal "this write is
+     * privileged and has already been authorized".
+     */
     protected $fillable = [
         'name',
         'email',
         'password',
-        'is_super_admin',
-        'status',
-        'suspended_reason',
-        'suspended_at',
     ];
 
     /**

@@ -53,4 +53,28 @@ class Document extends Model
     {
         return $this->status === 'ready';
     }
+
+    /**
+     * BUG-003 fix: soft-deleting a document used to leave its excerpts and
+     * annotations fully visible and active (they don't cascade from a soft
+     * delete the way a real `ON DELETE CASCADE` would from a hard delete).
+     * Soft-deleting them too keeps them consistent with the document, and
+     * each one's own `deleting` event (see Excerpt/Note) cleans up any
+     * workspace_items/links that pointed at it - so a document delete
+     * correctly ripples through the whole chain. The physical file and
+     * `document_pages` rows are deliberately NOT touched here; see
+     * App\Console\Commands\PurgeSoftDeletedDocuments for the retention-
+     * window cleanup that removes them for good.
+     */
+    protected static function booted(): void
+    {
+        static::deleting(function (Document $document) {
+            if ($document->isForceDeleting()) {
+                return;
+            }
+
+            $document->excerpts()->get()->each->delete();
+            $document->annotations()->get()->each->delete();
+        });
+    }
 }

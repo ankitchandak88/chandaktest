@@ -42,7 +42,14 @@ class UserResource extends Resource
                     ->helperText('Leave blank to keep the current password.'),
                 Forms\Components\Toggle::make('is_super_admin')
                     ->label('Super admin (Filament access)')
-                    ->helperText('Grants access to this admin panel.'),
+                    ->helperText('Grants access to this admin panel.')
+                    // Docs/06 6.3 defines 'support' as a LIMITED-access role
+                    // distinct from super_admin. Both can reach this panel
+                    // (User::canAccessPanel), so without this guard a
+                    // support-role staff member could use this ordinary
+                    // edit form to grant themselves super-admin.
+                    ->visible(fn () => (bool) auth()->user()?->is_super_admin)
+                    ->disabled(fn () => ! auth()->user()?->is_super_admin),
                 Forms\Components\Select::make('status')
                     ->options(['active' => 'Active', 'suspended' => 'Suspended'])
                     ->required(),
@@ -81,11 +88,11 @@ class UserResource extends Resource
                         Forms\Components\Textarea::make('reason')->required(),
                     ])
                     ->action(function (User $record, array $data) {
-                        $record->update([
+                        $record->forceFill([
                             'status' => 'suspended',
                             'suspended_reason' => $data['reason'],
                             'suspended_at' => now(),
-                        ]);
+                        ])->save();
                         $record->tokens()->delete();
 
                         app(AuditLogger::class)->log(
@@ -105,11 +112,11 @@ class UserResource extends Resource
                     ->icon('heroicon-o-check-circle')
                     ->color('success')
                     ->action(function (User $record) {
-                        $record->update([
+                        $record->forceFill([
                             'status' => 'active',
                             'suspended_reason' => null,
                             'suspended_at' => null,
-                        ]);
+                        ])->save();
 
                         app(AuditLogger::class)->log(
                             auth()->id(),

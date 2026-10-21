@@ -62,3 +62,36 @@ test('removing the last owner is rejected', function () {
 
     expect(Membership::find($ownMembership->id))->not->toBeNull();
 });
+
+// BUG-005
+test('re-adding an existing member with a different role actually updates the role', function () {
+    ['headers' => $ownerHeaders, 'organization' => $organization] = registerUser('org-owner5@example.test');
+    ['user' => $member] = registerUser('org-member5@example.test');
+
+    Membership::create(['organization_id' => $organization->id, 'user_id' => $member->id, 'role' => 'member']);
+
+    $response = apiPost('/api/v1/organizations/current/members', [
+        'email' => $member->email,
+        'role' => 'owner',
+    ], $ownerHeaders);
+
+    // Updating an existing membership is a 200, not a 201 "created".
+    $response->assertOk();
+    expect($response->json('data.role'))->toBe('owner');
+    expect(
+        Membership::where('organization_id', $organization->id)->where('user_id', $member->id)->value('role')
+    )->toBe('owner');
+});
+
+test('demoting the sole owner through the add-member endpoint is rejected', function () {
+    ['headers' => $ownerHeaders, 'organization' => $organization, 'user' => $owner] = registerUser('org-owner6@example.test');
+
+    apiPost('/api/v1/organizations/current/members', [
+        'email' => $owner->email,
+        'role' => 'member',
+    ], $ownerHeaders)->assertStatus(409);
+
+    expect(
+        Membership::where('organization_id', $organization->id)->where('user_id', $owner->id)->value('role')
+    )->toBe('owner');
+});

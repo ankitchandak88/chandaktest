@@ -50,7 +50,8 @@ test('a protected route without auth returns 401', function () {
 
 test('a suspended user cannot log in', function () {
     ['user' => $user] = registerUser('suspended@example.test');
-    $user->update(['status' => 'suspended']);
+    // forceFill: status is deliberately outside $fillable (SEC-005).
+    $user->forceFill(['status' => 'suspended'])->save();
 
     apiPost('/api/v1/auth/login', [
         'email' => 'suspended@example.test',

@@ -5,9 +5,14 @@ import { apiErrorMessage } from '@/lib/api'
 import { Button, Card, EmptyState, FieldError, Input, Spinner } from '@/components/ui'
 
 export default function DashboardPage() {
-  const { data: projects, isLoading } = useProjects()
+  const { data, isLoading, fetchNextPage, hasNextPage, isFetchingNextPage } = useProjects()
   const { data: usage } = useUsage()
   const createProject = useCreateProject()
+
+  // BUG-006: flatten every loaded page into one list. Beyond the first 20
+  // projects, more only appear after "Load more" - see hasNextPage below.
+  const projects = data?.pages.flatMap((page) => page.data) ?? []
+  const total = data?.pages[0]?.meta.total
 
   const [name, setName] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -64,7 +69,7 @@ export default function DashboardPage() {
 
       {isLoading && <Spinner />}
 
-      {!isLoading && projects?.length === 0 && (
+      {!isLoading && projects.length === 0 && (
         <EmptyState
           title="No projects yet"
           description="Create a project, then upload a PDF to start reading and annotating."
@@ -72,7 +77,7 @@ export default function DashboardPage() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {projects?.map((project) => (
+        {projects.map((project) => (
           <Link key={project.id} to={`/projects/${project.id}`}>
             <Card className="h-full transition-colors hover:border-accent/50">
               <h2 className="font-medium text-slate-100">{project.name}</h2>
@@ -87,6 +92,19 @@ export default function DashboardPage() {
           </Link>
         ))}
       </div>
+
+      {hasNextPage && (
+        <div className="mt-6 flex flex-col items-center gap-1">
+          <Button variant="secondary" onClick={() => fetchNextPage()} disabled={isFetchingNextPage}>
+            {isFetchingNextPage ? 'Loading…' : 'Load more'}
+          </Button>
+          {total !== undefined && (
+            <p className="text-xs text-slate-500">
+              Showing {projects.length} of {total}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
