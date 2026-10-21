@@ -9,14 +9,22 @@ import '../models/models.dart';
 class ProjectApi {
   static Dio get _dio => ApiClient.instance.dio;
 
+  // See PageMeta's doc comment: the paginator's fields (current_page,
+  // last_page, total, ...) sit at the same top level as `data`, not nested
+  // under a `meta` key - this reads both from that one flat map.
+  static Paginated<T> _paginated<T>(
+    Map<String, dynamic> json,
+    T Function(Map<String, dynamic>) fromJson,
+  ) {
+    return Paginated(
+      data: (json['data'] as List).map((e) => fromJson(e as Map<String, dynamic>)).toList(),
+      meta: PageMeta.fromJson(json),
+    );
+  }
+
   static Future<Paginated<Project>> listProjects({int page = 1}) async {
     final response = await _dio.get('/projects', queryParameters: {'page': page});
-    return Paginated(
-      data: (response.data['data'] as List)
-          .map((e) => Project.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      meta: PageMeta.fromJson(response.data['meta'] as Map<String, dynamic>),
-    );
+    return _paginated(response.data as Map<String, dynamic>, Project.fromJson);
   }
 
   static Future<Project> createProject(String name) async {
@@ -34,12 +42,7 @@ class ProjectApi {
       '/projects/$projectId/documents',
       queryParameters: {'page': page},
     );
-    return Paginated(
-      data: (response.data['data'] as List)
-          .map((e) => ReaderDocument.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      meta: PageMeta.fromJson(response.data['meta'] as Map<String, dynamic>),
-    );
+    return _paginated(response.data as Map<String, dynamic>, ReaderDocument.fromJson);
   }
 
   static Future<ReaderDocument> uploadDocument(String projectId, File file) async {
@@ -63,22 +66,12 @@ class ProjectApi {
       '/projects/$projectId/excerpts',
       queryParameters: {'page': page},
     );
-    return Paginated(
-      data: (response.data['data'] as List)
-          .map((e) => Excerpt.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      meta: PageMeta.fromJson(response.data['meta'] as Map<String, dynamic>),
-    );
+    return _paginated(response.data as Map<String, dynamic>, Excerpt.fromJson);
   }
 
   static Future<Paginated<ResearchNote>> listNotes(String projectId, {int page = 1}) async {
     final response = await _dio.get('/projects/$projectId/notes', queryParameters: {'page': page});
-    return Paginated(
-      data: (response.data['data'] as List)
-          .map((e) => ResearchNote.fromJson(e as Map<String, dynamic>))
-          .toList(),
-      meta: PageMeta.fromJson(response.data['meta'] as Map<String, dynamic>),
-    );
+    return _paginated(response.data as Map<String, dynamic>, ResearchNote.fromJson);
   }
 
   static Future<ResearchNote> createNote(String projectId, String content) async {

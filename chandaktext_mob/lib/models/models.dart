@@ -1,7 +1,9 @@
-/// Pagination metadata matching the backend's standard paginated envelope
-/// (`{data: [...], meta: {current_page, last_page, total, ...}}`) - see
-/// web/src/lib/queries.ts's useInfiniteQuery conversion (BUG-006) for the
-/// same fix applied there.
+/// Pagination metadata. The backend's paginated endpoints (Project/
+/// Document/Excerpt/Note controllers) return `response()->json($paginator)`
+/// directly, i.e. Laravel's native flat LengthAwarePaginator shape -
+/// current_page/last_page/total etc. sit at the TOP LEVEL alongside `data`,
+/// there is no nested `meta` object (confirmed against a live response,
+/// not assumed from the in-code comments claiming otherwise).
 class PageMeta {
   final int currentPage;
   final int lastPage;
