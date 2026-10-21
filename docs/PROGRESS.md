@@ -42,14 +42,44 @@ annotations, both platforms.
   via USB, `adb reverse tcp:8123 tcp:8123`, install the already-built
   `chandaktext_mob/build/app/outputs/flutter-apk/app-debug.apk`).
 
-**Next on resume**: Phase 2 (pen + highlighter-as-stroke + eraser + lasso,
-the actual "drawing engine" - `perfect-freehand`/`perfect_freehand` already
-added to both `web/package.json`-equivalent install list and
-`pubspec.yaml`). Then Phase 3 (Drawing/Document/Workspace mode tabs +
-Outline + HiLiteView), Phase 4 (polish: undo/redo, AI summarize, bake
-annotations into PDF export). Do the live phone check for Phase 1 before
-or alongside starting Phase 2, not after - don't let verification debt
-stack up across phases.
+**Phase 2 — DONE, committed (`b957f61`)**: real pen/highlighter/eraser/lasso
+drawing engine, both platforms. One `Annotation` row (`type='ink'`) per
+stroke - `payload = {points: [[x,y,pressure],...], size, tool}`, identical
+shape on both platforms.
+- Web: `perfect-freehand` renders strokes as SVG paths (new
+  `web/src/lib/freehand.ts` helper). Eraser hit-tests live against
+  ink points/highlight rects while dragging. Lasso does point-in-polygon
+  against each annotation's anchor, shows a "N selected · Delete" bar.
+- Mobile: `perfect_freehand` (Dart port, same algorithm as web) renders via
+  a new `CustomPainter` overlay - Syncfusion's native annotation system
+  (used for Phase 1's highlight/underline/comment) has no ink/freehand
+  type. Syncfusion's viewer has no public API for a page's on-screen rect
+  during continuous scroll, so drawing mode forces
+  `PdfPageLayoutMode.single` (fits the whole page in the viewport, no
+  scroll overflow) and maps touches via a fit-within-viewport calculation
+  against the page's real point-size.
+- Verified: backend 110 tests passed (1 new); web build/lint clean; mobile
+  `flutter analyze`/`flutter test` clean, arm64 debug APK builds.
+  **⚠️ NOT YET LIVE-VERIFIED**: the mobile touch→page-coordinate mapping
+  for drawing (`_pageRectInViewport`/`_localToNormalized` in
+  `pdf_reader_screen.dart`) has never been tested on a real device - phone
+  was disconnected the entire time this phase was built. **This is the
+  single highest-priority thing to check the moment the phone reconnects**
+  - draw a pen stroke, confirm it visually lands under your finger, not
+  offset. If it's off, the fix is isolated to those two functions.
+
+**Next on resume**: 1) **live-verify Phase 1 AND Phase 2 on the real
+device** (both are implemented but unverified - don't start Phase 3 before
+this, verification debt across phases was explicitly something to avoid).
+2) Phase 3 (Drawing/Document/Workspace mode tabs reorganizing the toolbar
+into the three modes the reference screenshots show, + Outline via
+`pdf.js getOutline()`/Syncfusion bookmarks, + HiLiteView reusing the
+`text` already captured on highlight annotations). 3) Phase 4 (undo/redo,
+AI summarize via existing `AiAssistantService`, bake annotations into the
+PDF export by extending `PdfHighlightOverlayGenerator`). 4) The plan's
+mandatory final cross-verification table - do not consider this done
+until every row is actually re-tested live, per the user's explicit
+"zero bugs, no compromise" bar.
 
 ## Decisions locked in (do not re-ask)
 - DB: **MySQL** (Laragon `mysql-8.0.30-winx64`, root / no password). Databases:
