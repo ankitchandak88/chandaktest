@@ -47,6 +47,24 @@ return [
             'report' => false,
         ],
 
+        /*
+         * Phase 15: dedicated disk for spatie/laravel-backup's destination,
+         * deliberately outside storage/app - that's also where the 'local'
+         * disk root lives (user-uploaded documents + exports), and backup
+         * source config (see config/backup.php) backs up that same
+         * storage/app tree. Sharing a disk between "files being backed up"
+         * and "where the backup zip is written" means each run would try to
+         * include previous backup zips in the next one - a classic
+         * self-referencing backup bug. A separate root avoids it entirely
+         * instead of relying on a fragile exclude path.
+         */
+        'backups' => [
+            'driver' => 'local',
+            'root' => storage_path('backups'),
+            'throw' => false,
+            'report' => false,
+        ],
+
         's3' => [
             'driver' => 's3',
             'key' => env('AWS_ACCESS_KEY_ID'),

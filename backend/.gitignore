@@ -18,6 +18,9 @@
 /public/storage
 /storage/*.key
 /storage/pail
+/storage/backups
+/storage/backup-temp
+/storage/restore-drill-tmp
 /vendor
 Homestead.json
 Homestead.yaml

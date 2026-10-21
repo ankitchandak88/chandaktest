@@ -62,6 +62,14 @@ return [
             'options' => extension_loaded('pdo_mysql') ? array_filter([
                 (PHP_VERSION_ID >= 80500 ? Mysql::ATTR_SSL_CA : PDO::MYSQL_ATTR_SSL_CA) => env('MYSQL_ATTR_SSL_CA'),
             ]) : [],
+
+            // Phase 15: spatie/laravel-backup (and php artisan db:*
+            // restore drills) shell out to `mysqldump`/`mysql`, which this
+            // Laragon install doesn't put on PATH - point straight at the
+            // bundled binaries instead of requiring a system PATH change.
+            'dump' => array_filter([
+                'dump_binary_path' => env('MYSQLDUMP_BINARY_PATH'),
+            ]),
         ],
 
         'mariadb' => [

@@ -20,6 +20,7 @@
         "setasign/fpdf": "^1.9",
         "setasign/fpdi": "^2.6",
         "smalot/pdfparser": "^2.13",
+        "spatie/laravel-backup": "^10.3",
         "spatie/laravel-permission": "^8.3"
     },
     "require-dev": {
