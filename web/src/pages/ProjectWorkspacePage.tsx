@@ -159,8 +159,10 @@ export default function ProjectWorkspacePage() {
     }
   }
 
+  const [exportFormat, setExportFormat] = useState<'pdf' | 'pdf_highlights'>('pdf')
+
   async function handleStartExport() {
-    const job = await startExport.mutateAsync()
+    const job = await startExport.mutateAsync(exportFormat)
     setExportId(job.id)
   }
 
@@ -225,6 +227,14 @@ export default function ProjectWorkspacePage() {
             </button>
           </nav>
 
+          <select
+            value={exportFormat}
+            onChange={(e) => setExportFormat(e.target.value as 'pdf' | 'pdf_highlights')}
+            className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
+          >
+            <option value="pdf">Compiled notes/excerpts</option>
+            <option value="pdf_highlights">Highlighted source PDF</option>
+          </select>
           <Button variant="secondary" onClick={handleStartExport} disabled={startExport.isPending}>
             Export
           </Button>

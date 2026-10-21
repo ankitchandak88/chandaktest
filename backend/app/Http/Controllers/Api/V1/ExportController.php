@@ -16,7 +16,7 @@ class ExportController extends Controller
         $this->authorize('create', [Export::class, $project]);
 
         $data = $request->validate([
-            'format' => ['sometimes', 'in:pdf,docx'],
+            'format' => ['sometimes', 'in:pdf,pdf_highlights,docx'],
         ]);
 
         $export = Export::create([

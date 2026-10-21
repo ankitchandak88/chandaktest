@@ -96,3 +96,35 @@ test('an export job produces a ready, downloadable PDF', function () {
         ->assertOk()
         ->assertHeader('content-type', 'application/pdf');
 });
+
+// EXPORT-001
+test('a pdf_highlights export job stamps the source pdf and produces a ready, downloadable file', function () {
+    \Illuminate\Support\Facades\Storage::fake('local');
+
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+    $document = createReadyDocument($project, $user->id);
+    \Illuminate\Support\Facades\Storage::disk('local')->put($document->storage_key, minimalPdfBytes());
+
+    Excerpt::create([
+        'organization_id' => $project->organization_id,
+        'project_id' => $project->id,
+        'document_id' => $document->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'text' => 'highlighted',
+        'source_rects' => [['x' => 0.1, 'y' => 0.1, 'width' => 0.2, 'height' => 0.05]],
+    ]);
+
+    $export = apiPost("/api/v1/projects/{$projectId}/exports", ['format' => 'pdf_highlights'], $headers);
+    $export->assertAccepted();
+    $exportId = $export->json('data.id');
+
+    $status = apiGet("/api/v1/exports/{$exportId}", $headers);
+    expect($status->json('data.status'))->toBe('ready');
+
+    apiGet("/api/v1/exports/{$exportId}/download", $headers)
+        ->assertOk()
+        ->assertHeader('content-type', 'application/pdf');
+});

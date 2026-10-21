@@ -321,8 +321,8 @@ export function useCreateAnnotation(documentId: string | undefined) {
 
 export function useStartExport(projectId: string | undefined) {
   return useMutation({
-    mutationFn: async () =>
-      (await api.post<{ data: ExportJob }>(`/projects/${projectId}/exports`)).data.data,
+    mutationFn: async (format: 'pdf' | 'pdf_highlights' = 'pdf') =>
+      (await api.post<{ data: ExportJob }>(`/projects/${projectId}/exports`, { format })).data.data,
   })
 }
 
