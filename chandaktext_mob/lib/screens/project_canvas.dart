@@ -186,19 +186,74 @@ class _ProjectCanvasState extends State<ProjectCanvas> {
 
   void _showTagPicker(_CanvasCard card) {
     final selected = card.tags.map((t) => t.id).toSet();
+    List<String> suggestions = [];
+    bool suggesting = false;
+
     showModalBottomSheet(
       context: context,
       builder: (sheetContext) {
         return StatefulBuilder(
           builder: (sheetContext, setSheetState) {
+            Future<void> acceptSuggestion(String name) async {
+              var tag = _findFirst(_tags, (t) => t.name.toLowerCase() == name.toLowerCase());
+              tag ??= await ProjectApi.createTag(widget.projectId, name);
+              if (!_tags.any((t) => t.id == tag!.id)) {
+                setState(() => _tags = [..._tags, tag!]);
+              }
+              setSheetState(() {
+                selected.add(tag!.id);
+                suggestions = suggestions.where((s) => s != name).toList();
+              });
+              if (card.kind == 'excerpt') {
+                await ProjectApi.syncExcerptTags(card.targetId, selected.toList());
+              } else {
+                await ProjectApi.syncNoteTags(card.targetId, selected.toList());
+              }
+            }
+
             return Padding(
               padding: const EdgeInsets.all(16),
               child: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  const Text('Assign tags', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
-                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Assign tags', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16)),
+                      ),
+                      TextButton.icon(
+                        icon: const Icon(Icons.auto_awesome, size: 14),
+                        label: Text(suggesting ? 'Thinking…' : 'Suggest'),
+                        onPressed: suggesting
+                            ? null
+                            : () async {
+                                setSheetState(() => suggesting = true);
+                                final names = card.kind == 'excerpt'
+                                    ? await ProjectApi.suggestExcerptTags(card.targetId)
+                                    : await ProjectApi.suggestNoteTags(card.targetId);
+                                setSheetState(() {
+                                  suggestions = names;
+                                  suggesting = false;
+                                });
+                              },
+                      ),
+                    ],
+                  ),
+                  if (suggestions.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 8),
+                      child: Wrap(
+                        spacing: 6,
+                        children: [
+                          for (final name in suggestions)
+                            ActionChip(
+                              label: Text('+ $name'),
+                              onPressed: () => acceptSuggestion(name),
+                            ),
+                        ],
+                      ),
+                    ),
                   if (_tags.isEmpty)
                     const Padding(
                       padding: EdgeInsets.symmetric(vertical: 8),

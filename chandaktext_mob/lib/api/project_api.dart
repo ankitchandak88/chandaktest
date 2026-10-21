@@ -188,4 +188,31 @@ class ProjectApi {
   static Future<void> revokeShare(String shareId) async {
     await _dio.delete('/shares/$shareId');
   }
+
+  static Future<String> summarizeDocument(String documentId, {bool force = false}) async {
+    final response = await _dio.post('/documents/$documentId/summarize', data: {'force': force});
+    return response.data['data']['summary'] as String;
+  }
+
+  static Future<String> chatAboutDocument(
+    String documentId,
+    String message,
+    List<Map<String, String>> history,
+  ) async {
+    final response = await _dio.post(
+      '/documents/$documentId/chat',
+      data: {'message': message, 'history': history},
+    );
+    return response.data['data']['reply'] as String;
+  }
+
+  static Future<List<String>> suggestExcerptTags(String excerptId) async {
+    final response = await _dio.post('/excerpts/$excerptId/suggest-tags');
+    return (response.data['data']['suggestions'] as List).cast<String>();
+  }
+
+  static Future<List<String>> suggestNoteTags(String noteId) async {
+    final response = await _dio.post('/notes/$noteId/suggest-tags');
+    return (response.data['data']['suggestions'] as List).cast<String>();
+  }
 }

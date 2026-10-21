@@ -7,6 +7,7 @@ import '../api/project_api.dart';
 import '../models/models.dart';
 import 'pdf_reader_screen.dart';
 import 'project_canvas.dart';
+import '../widgets/ai_document_panel.dart';
 import '../widgets/citation_editor.dart';
 import '../widgets/share_manager.dart';
 
@@ -333,6 +334,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                                 setState(() {
                                   final idx = _documents.indexWhere((d) => d.id == updated.id);
                                   if (idx != -1) _documents[idx] = updated;
+                                });
+                              },
+                            ),
+                            const SizedBox(height: 6),
+                            AiDocumentPanel(
+                              document: doc,
+                              onSummaryUpdated: (summary) {
+                                setState(() {
+                                  final idx = _documents.indexWhere((d) => d.id == doc.id);
+                                  if (idx != -1) _documents[idx] = doc.copyWith(aiSummary: summary);
                                 });
                               },
                             ),

@@ -93,6 +93,7 @@ class ReaderDocument {
   final Map<String, dynamic>? citationMetadata;
   final String? citationApa;
   final String? citationMla;
+  final String? aiSummary;
 
   ReaderDocument({
     required this.id,
@@ -104,7 +105,21 @@ class ReaderDocument {
     this.citationMetadata,
     this.citationApa,
     this.citationMla,
+    this.aiSummary,
   });
+
+  ReaderDocument copyWith({String? aiSummary}) => ReaderDocument(
+        id: id,
+        projectId: projectId,
+        originalFilename: originalFilename,
+        status: status,
+        pageCount: pageCount,
+        failureReason: failureReason,
+        citationMetadata: citationMetadata,
+        citationApa: citationApa,
+        citationMla: citationMla,
+        aiSummary: aiSummary ?? this.aiSummary,
+      );
 
   factory ReaderDocument.fromJson(Map<String, dynamic> json) => ReaderDocument(
         id: json['id'] as String,
@@ -113,6 +128,7 @@ class ReaderDocument {
         pageCount: json['page_count'] as int?,
         status: json['status'] as String,
         failureReason: json['failure_reason'] as String?,
+        aiSummary: json['ai_summary'] as String?,
         citationMetadata: (json['citation_metadata'] as Map?)?.cast<String, dynamic>(),
         citationApa: json['citation_apa'] as String?,
         citationMla: json['citation_mla'] as String?,
