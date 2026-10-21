@@ -18,6 +18,7 @@ import {
   useUploadDocument,
   useWorkspaceItems,
 } from '@/lib/queries'
+import ShareManager from '@/components/ShareManager'
 import { api, apiErrorMessage } from '@/lib/api'
 import { Button, Card, EmptyState, Spinner } from '@/components/ui'
 import CitationEditor from '@/components/CitationEditor'
@@ -375,6 +376,8 @@ export default function ProjectWorkspacePage() {
                 </span>
               ))}
             </div>
+
+            <ShareManager projectId={projectId!} />
 
             {linkMode ? (
               <p className="rounded-md bg-slate-800 p-2 text-xs text-slate-300">

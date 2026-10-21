@@ -46,6 +46,18 @@ export interface SourceRect {
   height: number
 }
 
+export interface ProjectShare {
+  id: string
+  project_id: string
+  created_by: number
+  token: string
+  expires_at: string
+  revoked_at: string | null
+  last_accessed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
 export interface Tag {
   id: string
   project_id: string

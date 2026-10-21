@@ -73,5 +73,10 @@ class AppServiceProvider extends ServiceProvider
         RateLimiter::for('member-management', fn (Request $request) => Limit::perMinute(10)->by(
             optional($request->user())->id ?: $request->ip()
         ));
+
+        // Public, unauthenticated share-link endpoints - rate limited by IP
+        // (there's no user to key on) to slow down password-guessing and
+        // token-scanning against ProjectShareController::show()/content().
+        RateLimiter::for('share-access', fn (Request $request) => Limit::perMinute(20)->by($request->ip()));
     }
 }

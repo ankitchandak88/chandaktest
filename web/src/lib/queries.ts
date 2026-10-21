@@ -10,6 +10,7 @@ import type {
   Note,
   Paginated,
   Project,
+  ProjectShare,
   Tag,
   UsageSummary,
   WorkspaceItem,
@@ -334,5 +335,33 @@ export function useExportStatus(exportId: string | undefined, enabled: boolean) 
       const job = query.state.data as ExportJob | undefined
       return job && job.status !== 'ready' && job.status !== 'failed' ? 1500 : false
     },
+  })
+}
+
+export function useShares(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'shares'],
+    queryFn: async () =>
+      (await api.get<{ data: ProjectShare[] }>(`/projects/${projectId}/shares`)).data.data,
+    enabled: !!projectId,
+  })
+}
+
+export function useCreateShare(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (input: { password?: string; expires_in_days?: number }) =>
+      (await api.post<{ data: ProjectShare }>(`/projects/${projectId}/shares`, input)).data.data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'shares'] }),
+  })
+}
+
+export function useRevokeShare(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (shareId: string) => (await api.delete(`/shares/${shareId}`)).data,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'shares'] }),
   })
 }

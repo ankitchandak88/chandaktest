@@ -10,6 +10,7 @@ use App\Http\Controllers\Api\V1\LinkController;
 use App\Http\Controllers\Api\V1\NoteController;
 use App\Http\Controllers\Api\V1\OrganizationController;
 use App\Http\Controllers\Api\V1\ProjectController;
+use App\Http\Controllers\Api\V1\ProjectShareController;
 use App\Http\Controllers\Api\V1\SearchController;
 use App\Http\Controllers\Api\V1\TagController;
 use App\Http\Controllers\Api\V1\UsageController;
@@ -24,6 +25,15 @@ Route::post('/auth/reset-password', [AuthController::class, 'resetPassword'])->m
 Route::get('/auth/email/verify/{id}/{hash}', [AuthController::class, 'verifyEmail'])
     ->middleware('signed')
     ->name('verification.verify');
+
+// Public share-link viewing (PROD-002) - deliberately outside auth:sanctum
+// and the 'org' tenant-scoping group entirely, since the whole point is
+// access without an account. See ProjectShareController's class docblock
+// for the scope this was locked in at.
+Route::middleware('throttle:share-access')->group(function () {
+    Route::get('/shares/{token}', [ProjectShareController::class, 'show']);
+    Route::post('/shares/{token}/content', [ProjectShareController::class, 'content']);
+});
 
 Route::get('/billing/plans', [BillingController::class, 'plans']);
 Route::post('/billing/webhooks/{provider}', [BillingController::class, 'webhook'])->middleware('throttle:webhooks');
@@ -84,6 +94,10 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::get('/projects/{project}/tags', [TagController::class, 'index']);
     Route::post('/projects/{project}/tags', [TagController::class, 'store']);
     Route::delete('/tags/{tag}', [TagController::class, 'destroy']);
+
+    Route::get('/projects/{project}/shares', [ProjectShareController::class, 'index']);
+    Route::post('/projects/{project}/shares', [ProjectShareController::class, 'store']);
+    Route::delete('/shares/{share}', [ProjectShareController::class, 'destroy']);
 
     Route::get('/projects/{project}/workspace-items', [WorkspaceItemController::class, 'index']);
     Route::post('/projects/{project}/workspace-items', [WorkspaceItemController::class, 'store']);

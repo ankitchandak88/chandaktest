@@ -5,6 +5,7 @@ import AppShell from '@/components/AppShell'
 import LoginPage from '@/pages/LoginPage'
 import RegisterPage from '@/pages/RegisterPage'
 import DashboardPage from '@/pages/DashboardPage'
+import SharePage from '@/pages/SharePage'
 import { Spinner } from '@/components/ui'
 
 // FE-002: ProjectWorkspacePage pulls in pdfjs-dist (a ~1.3MB worker plus its
@@ -18,6 +19,7 @@ function App() {
     <Routes>
       <Route path="/login" element={<LoginPage />} />
       <Route path="/register" element={<RegisterPage />} />
+      <Route path="/share/:token" element={<SharePage />} />
 
       <Route element={<ProtectedRoute />}>
         <Route element={<AppShell />}>

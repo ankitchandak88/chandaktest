@@ -64,4 +64,9 @@ class Project extends Model
     {
         return $this->hasMany(Tag::class);
     }
+
+    public function shares(): HasMany
+    {
+        return $this->hasMany(ProjectShare::class);
+    }
 }
