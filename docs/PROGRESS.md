@@ -339,31 +339,73 @@ if exports ever seem to run "old" code again, check
 Full backend suite after Phase 13: **101 passed (268 assertions)**. Web
 `tsc --noEmit`: clean.
 
-### Next up — Phases 14–18 (ops/release-prep, not started yet)
+### Phases 14–18 (ops/release-prep) — 14 and 15 done, 16–18 in progress
 
 User asked for these to be phased too, after confirming testing/smoke-test
 status. **Decisions locked in** (so don't re-ask):
-- Phase 14 error tracking: **Sentry** (`sentry/sentry-laravel`) — wire it
-  config-driven via `.env`, same pattern as `AI_PROVIDER`: works with no
-  DSN set (just doesn't report anywhere), user will supply a real DSN
-  later when they have one. User didn't know what a Sentry DSN was when
-  asked — a short explanation is owed at the start of Phase 14, not just
-  silently assumed knowledge.
+- Phase 14 error tracking: **Sentry**. Phase 18 target stores: **both
+  Google Play and Apple App Store** (iOS prep is documentation-only — no
+  Mac/Xcode on this machine).
 - Phase 15 backup destination: **local disk only** for now (no production
-  hosting/cloud bucket decided yet) — `spatie/laravel-backup`, DB dump +
-  `storage/app`, plus an actual restore drill into a scratch DB (not just
-  "the backup file exists").
-- Phase 18 target stores: **both Google Play and Apple App Store**. This
-  machine has no Mac/Xcode, so iOS-specific steps (archive/signing, App
-  Store Connect setup) can only be prepared as a documented checklist, not
-  executed, until Mac access exists — flag this plainly when Phase 18 is
-  reached rather than silently skipping it.
+  hosting/cloud bucket decided yet).
 
-Phase 16 (deployment checklist) and Phase 17 (mobile device test matrix)
-have no blocking decisions — can start directly.
+**Phase 14 — done, committed**: `sentry/sentry-laravel` wired via
+`Integration::handles()` in `bootstrap/app.php`, config-driven through
+`SENTRY_LARAVEL_DSN` (same works-with-no-key pattern as `AI_PROVIDER`).
+New `AssignRequestId` middleware gives every request one id, consistent
+across the error JSON body, `X-Request-Id` header, log `Context`, and
+Sentry's tagged scope (+ organization_id/user id once
+`ResolveOrganization` has run). New `CheckApplicationHealth` listener
+makes `/up` actually check DB/queue/storage reachability instead of just
+proving the app booted — the framework's default `/up` dispatches
+`DiagnosingHealth` but has nothing listening by default. Verified: tests
+for both the healthy path and a deliberately-unreachable DB (exercised
+the listener directly, not through HTTP, to avoid breaking the test's own
+`RefreshDatabase` transaction teardown), plus a live curl against the
+running dev server.
 
-**Next step on resume**: start Phase 14 (Sentry integration + `/up` health
-check endpoint + structured exception context).
+**Phase 15 — done, committed**: `spatie/laravel-backup`, DB dump +
+`storage/app` (not application code — already in git). New `backups`
+filesystem disk and a relocated `temporary_directory`, both deliberately
+outside `storage/app` — a real self-referencing-backup bug was found and
+fixed here (destination/temp dir living inside the thing being backed up
+means each run tries to include the previous run's own zip). New `php
+artisan backup:restore-drill` command actually restores the latest
+backup's DB dump into a throwaway scratch database and compares every
+table's row count against live data — run for real on this machine,
+passed, output captured in `docs/backup-restore.md`. `mysqldump`/`mysql`
+aren't on this Laragon install's PATH — binary directory comes from the
+new `MYSQLDUMP_BINARY_PATH` env var. Scheduled daily (`backup:run` 02:00,
+`backup:clean` 02:30, `routes/console.php`). Full suite: 106 passed.
+
+**Phases 16–18 — dispatched to 3 parallel fork agents** (user asked to
+speed this up with multiple agents), each scoped to its own files only,
+none committing — the resuming session must review and commit their
+output once all three report back:
+- Phase 16 (`docs/09-deployment.md` + a supervisor config template):
+  env vars, first-deploy steps, queue worker supervision, web build/serve,
+  storage/permissions, HTTPS/reverse-proxy notes, `/up` as the LB health
+  check, rollback notes.
+- Phase 17 (`docs/mobile-test-matrix.md`): a real API-level/screen-size
+  matrix grounded in `chandaktext_mob/android/app/build.gradle`'s actual
+  min/target SDK, executing a second-AVD smoke boot where the machine's
+  resources allow it (don't fight emulator instability indefinitely — same
+  judgment call as earlier in this session), iOS flagged as
+  documentation-only (needs a Mac).
+- Phase 18 (`docs/app-store-submission.md` + `docs/privacy-policy-draft.md`):
+  icon/screenshot size requirements for both stores, a grounded store
+  listing draft (real feature set, not invented), a real privacy-policy
+  draft (flagging the AI-provider third-party data sharing specifically),
+  Play Data Safety checklist, Android signing/AAB prep, iOS steps flagged
+  as needing Mac access.
+
+**Next step on resume**: check whether all three fork agents have
+reported back (if this session is being read before that happened,
+resume by checking agent status / re-dispatching anything that didn't
+finish); once all three are in, review their output for accuracy against
+the real codebase, commit, then do a final cross-verification + smoke
+test pass end-to-end (explicitly requested before the user went to sleep)
+before considering this entire ops batch done.
 
 ---
 
