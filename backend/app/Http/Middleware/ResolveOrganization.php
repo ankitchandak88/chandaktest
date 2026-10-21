@@ -5,6 +5,7 @@ namespace App\Http\Middleware;
 use App\Models\Membership;
 use Closure;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Context;
 use Symfony\Component\HttpFoundation\Response;
 
 /**
@@ -52,6 +53,8 @@ class ResolveOrganization
 
         $request->attributes->set('organization', $membership->organization);
         $request->attributes->set('membership', $membership);
+        Context::add('organization_id', $membership->organization->id);
+        Context::add('user_id', $user->id);
 
         return $next($request);
     }

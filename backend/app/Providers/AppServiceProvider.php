@@ -2,8 +2,11 @@
 
 namespace App\Providers;
 
+use App\Listeners\CheckApplicationHealth;
 use App\Models\Organization;
+use Illuminate\Foundation\Events\DiagnosingHealth;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Cache\RateLimiting\Limit;
 use Illuminate\Support\ServiceProvider;
@@ -34,6 +37,8 @@ class AppServiceProvider extends ServiceProvider
             /** @var Request $this */
             return $this->attributes->get('membership');
         });
+
+        Event::listen(DiagnosingHealth::class, CheckApplicationHealth::class);
 
         $this->configureRateLimiters();
     }
