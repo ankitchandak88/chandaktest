@@ -110,17 +110,34 @@ class ReaderDocument {
       );
 }
 
+class Tag {
+  final String id;
+  final String name;
+
+  Tag({required this.id, required this.name});
+
+  factory Tag.fromJson(Map<String, dynamic> json) => Tag(
+        id: json['id'] as String,
+        name: json['name'] as String,
+      );
+}
+
+List<Tag> _tagsFromJson(Map<String, dynamic> json) =>
+    (json['tags'] as List?)?.map((t) => Tag.fromJson(t as Map<String, dynamic>)).toList() ?? [];
+
 class Excerpt {
   final String id;
   final String documentId;
   final int pageNumber;
   final String text;
+  final List<Tag> tags;
 
   Excerpt({
     required this.id,
     required this.documentId,
     required this.pageNumber,
     required this.text,
+    this.tags = const [],
   });
 
   factory Excerpt.fromJson(Map<String, dynamic> json) => Excerpt(
@@ -128,6 +145,7 @@ class Excerpt {
         documentId: json['document_id'] as String,
         pageNumber: json['page_number'] as int,
         text: json['text'] as String,
+        tags: _tagsFromJson(json),
       );
 }
 
@@ -135,13 +153,74 @@ class ResearchNote {
   final String id;
   final String? title;
   final String? content;
+  final List<Tag> tags;
 
-  ResearchNote({required this.id, this.title, this.content});
+  ResearchNote({required this.id, this.title, this.content, this.tags = const []});
 
   factory ResearchNote.fromJson(Map<String, dynamic> json) => ResearchNote(
         id: json['id'] as String,
         title: json['title'] as String?,
         content: json['content'] as String?,
+        tags: _tagsFromJson(json),
+      );
+}
+
+/// A card's position/size on the project canvas (Phase 7: mobile canvas
+/// editing, matching web/src/components/WorkspaceCanvas.tsx). `itemType`
+/// + `targetId` identify which Excerpt or ResearchNote this card renders -
+/// the same typed-pair pattern the backend uses instead of a raw
+/// polymorphic FK (see backend's CleansUpWorkspaceReferences doc comment).
+class WorkspaceItem {
+  final String id;
+  final String itemType; // 'excerpt' | 'note'
+  final String targetId;
+  final double x;
+  final double y;
+  final double width;
+  final double height;
+
+  WorkspaceItem({
+    required this.id,
+    required this.itemType,
+    required this.targetId,
+    required this.x,
+    required this.y,
+    required this.width,
+    required this.height,
+  });
+
+  factory WorkspaceItem.fromJson(Map<String, dynamic> json) => WorkspaceItem(
+        id: json['id'] as String,
+        itemType: json['item_type'] as String,
+        targetId: json['target_id'] as String,
+        x: (json['x'] as num).toDouble(),
+        y: (json['y'] as num).toDouble(),
+        width: (json['width'] as num?)?.toDouble() ?? 240,
+        height: (json['height'] as num?)?.toDouble() ?? 120,
+      );
+}
+
+class ProjectLink {
+  final String id;
+  final String sourceType;
+  final String sourceId;
+  final String targetType;
+  final String targetId;
+
+  ProjectLink({
+    required this.id,
+    required this.sourceType,
+    required this.sourceId,
+    required this.targetType,
+    required this.targetId,
+  });
+
+  factory ProjectLink.fromJson(Map<String, dynamic> json) => ProjectLink(
+        id: json['id'] as String,
+        sourceType: json['source_type'] as String,
+        sourceId: json['source_id'] as String,
+        targetType: json['target_type'] as String,
+        targetId: json['target_id'] as String,
       );
 }
 

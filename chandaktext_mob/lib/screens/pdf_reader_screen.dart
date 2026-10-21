@@ -40,7 +40,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       // here yet - a full-page placeholder rect is stored instead, so the
       // excerpt still links back to the right document+page even though
       // on-page highlight positioning isn't pixel-accurate on mobile yet.
-      await ApiClient.instance.dio.post(
+      final response = await ApiClient.instance.dio.post(
         '/projects/${widget.document.projectId}/excerpts',
         data: {
           'document_id': widget.document.id,
@@ -51,6 +51,16 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
           ],
         },
       );
+
+      // Phase 7: without a workspace_item, this excerpt would never appear
+      // on the canvas (web's or mobile's) - see
+      // project_detail_screen.dart's _placeOnCanvas for the same reasoning.
+      final excerptId = response.data['data']['id'] as String;
+      final offset = (DateTime.now().millisecondsSinceEpoch % 10) * 24.0;
+      await ProjectApi.saveWorkspaceBatch(widget.document.projectId, [
+        {'item_type': 'excerpt', 'target_id': excerptId, 'x': 40.0 + offset, 'y': 40.0 + offset},
+      ]);
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Excerpt saved.')),

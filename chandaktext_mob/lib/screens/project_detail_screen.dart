@@ -6,6 +6,7 @@ import '../api/api_client.dart';
 import '../api/project_api.dart';
 import '../models/models.dart';
 import 'pdf_reader_screen.dart';
+import 'project_canvas.dart';
 
 class ProjectDetailScreen extends StatefulWidget {
   const ProjectDetailScreen({super.key, required this.project});
@@ -164,8 +165,21 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
     if (content == null || content.isEmpty) return;
 
-    await ProjectApi.createNote(widget.project.id, content);
+    final note = await ProjectApi.createNote(widget.project.id, content);
+    await _placeOnCanvas('note', note.id);
     await _reload();
+  }
+
+  // A fresh excerpt/note has no workspace_item yet, so it would never
+  // appear on the canvas (web's or this one) until positioned - matches
+  // web's nextCanvasPosition() (ProjectWorkspacePage.tsx), with the same
+  // small cascading offset so new cards don't all stack on top of each
+  // other.
+  Future<void> _placeOnCanvas(String itemType, String targetId) async {
+    final offset = (DateTime.now().millisecondsSinceEpoch % 10) * 24.0;
+    await ProjectApi.saveWorkspaceBatch(widget.project.id, [
+      {'item_type': itemType, 'target_id': targetId, 'x': 40.0 + offset, 'y': 40.0 + offset},
+    ]);
   }
 
   Future<void> _startExport() async {
@@ -196,7 +210,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 3,
+      length: 4,
       child: Scaffold(
         appBar: AppBar(
           title: Text(widget.project.name),
@@ -205,6 +219,7 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               Tab(text: 'Documents'),
               Tab(text: 'Excerpts'),
               Tab(text: 'Notes'),
+              Tab(text: 'Canvas'),
             ],
           ),
           actions: [
@@ -232,6 +247,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                         _buildDocumentsTab(),
                         _buildExcerptsTab(),
                         _buildNotesTab(),
+                        ProjectCanvas(
+                          projectId: widget.project.id,
+                          excerpts: _excerpts,
+                          notes: _notes,
+                        ),
                       ],
                     ),
             ),

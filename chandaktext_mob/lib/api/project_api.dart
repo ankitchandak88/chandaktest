@@ -88,4 +88,43 @@ class ProjectApi {
     final response = await _dio.get('/exports/$exportId');
     return response.data['data'] as Map<String, dynamic>;
   }
+
+  // Unpaginated, like links below - same precedent as the web app
+  // (Links/WorkspaceItems endpoints return the full list, see
+  // backend/routes/api/v1.php).
+  static Future<List<WorkspaceItem>> listWorkspaceItems(String projectId) async {
+    final response = await _dio.get('/projects/$projectId/workspace-items');
+    return (response.data['data'] as List)
+        .map((e) => WorkspaceItem.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static Future<void> saveWorkspaceBatch(
+    String projectId,
+    List<Map<String, dynamic>> items,
+  ) async {
+    await _dio.post('/projects/$projectId/workspace-items/batch', data: {'items': items});
+  }
+
+  static Future<List<ProjectLink>> listLinks(String projectId) async {
+    final response = await _dio.get('/projects/$projectId/links');
+    return (response.data['data'] as List)
+        .map((e) => ProjectLink.fromJson(e as Map<String, dynamic>))
+        .toList();
+  }
+
+  static Future<void> createLink(
+    String projectId, {
+    required String sourceType,
+    required String sourceId,
+    required String targetType,
+    required String targetId,
+  }) async {
+    await _dio.post('/projects/$projectId/links', data: {
+      'source_type': sourceType,
+      'source_id': sourceId,
+      'target_type': targetType,
+      'target_id': targetId,
+    });
+  }
 }
