@@ -159,3 +159,28 @@ test('a pdf_highlights export job stamps the source pdf and produces a ready, do
         ->assertOk()
         ->assertHeader('content-type', 'application/pdf');
 });
+
+// Phase 13
+test('a docx export job produces a ready, downloadable Word document', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+
+    \App\Models\Note::create([
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'title' => 'Note',
+        'content' => 'Exported content',
+    ]);
+
+    $export = apiPost("/api/v1/projects/{$projectId}/exports", ['format' => 'docx'], $headers);
+    $export->assertAccepted();
+    $exportId = $export->json('data.id');
+
+    $status = apiGet("/api/v1/exports/{$exportId}", $headers);
+    expect($status->json('data.status'))->toBe('ready');
+
+    apiGet("/api/v1/exports/{$exportId}/download", $headers)
+        ->assertOk()
+        ->assertHeader('content-type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+});

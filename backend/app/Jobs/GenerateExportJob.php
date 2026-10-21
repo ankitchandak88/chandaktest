@@ -3,6 +3,7 @@
 namespace App\Jobs;
 
 use App\Models\Export;
+use App\Services\DocxExportGenerator;
 use App\Services\HtmlToPdfRenderer;
 use App\Services\PdfHighlightOverlayGenerator;
 use Illuminate\Bus\Queueable;
@@ -22,10 +23,9 @@ use Illuminate\Support\Facades\Storage;
  * non-Latin text (Hindi, Arabic, Chinese, ...) renders correctly instead
  * of being transliterated into something unreadable. For 'pdf_highlights'
  * (EXPORT-001), see PdfHighlightOverlayGenerator - that one stamps excerpt
- * regions directly onto the original PDF's pages instead. DOCX export is
- * not implemented yet — the PRD explicitly defers it until a library/
- * formatting scope is chosen, so requesting format=docx fails clearly
- * instead of producing something.
+ * regions directly onto the original PDF's pages instead. For 'docx'
+ * (Phase 13), see DocxExportGenerator - same compiled content scope as
+ * 'pdf', built via PHPWord instead of mPDF.
  */
 class GenerateExportJob implements ShouldQueue
 {
@@ -47,10 +47,10 @@ class GenerateExportJob implements ShouldQueue
             return;
         }
 
-        if (! in_array($export->format, ['pdf', 'pdf_highlights'], true)) {
+        if (! in_array($export->format, ['pdf', 'pdf_highlights', 'docx'], true)) {
             $export->forceFill([
                 'status' => 'failed',
-                'failure_reason' => 'DOCX export is not implemented in this MVP yet.',
+                'failure_reason' => 'Unsupported export format.',
             ])->save();
 
             return;
@@ -60,11 +60,14 @@ class GenerateExportJob implements ShouldQueue
             $export->update(['status' => 'processing']);
 
             $project = $export->project;
-            $key = "exports/{$export->id}.pdf";
+            $extension = $export->format === 'docx' ? 'docx' : 'pdf';
+            $key = "exports/{$export->id}.{$extension}";
             $tmpPath = tempnam(sys_get_temp_dir(), 'export');
 
             if ($export->format === 'pdf_highlights') {
                 app(PdfHighlightOverlayGenerator::class)->generate($project, $tmpPath);
+            } elseif ($export->format === 'docx') {
+                app(DocxExportGenerator::class)->generate($project, $tmpPath);
             } else {
                 $html = view('exports.compiled', ['project' => $project])->render();
                 app(HtmlToPdfRenderer::class)->render($html, $tmpPath);

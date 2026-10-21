@@ -50,6 +50,11 @@ class ExportController extends Controller
             abort(410, 'This export link has expired. Request a new export.');
         }
 
-        return Storage::disk('local')->download($export->storage_key, "export-{$export->project_id}.pdf");
+        $extension = $export->format === 'docx' ? 'docx' : 'pdf';
+
+        return Storage::disk('local')->download(
+            $export->storage_key,
+            "export-{$export->project_id}.{$extension}"
+        );
     }
 }

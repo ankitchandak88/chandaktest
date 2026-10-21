@@ -130,7 +130,7 @@ export interface Annotation {
 export interface ExportJob {
   id: string
   project_id: string
-  format: 'pdf' | 'docx'
+  format: 'pdf' | 'pdf_highlights' | 'docx'
   status: 'queued' | 'processing' | 'ready' | 'failed'
   failure_reason: string | null
   expires_at: string | null

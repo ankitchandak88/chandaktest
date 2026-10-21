@@ -160,7 +160,7 @@ export default function ProjectWorkspacePage() {
     }
   }
 
-  const [exportFormat, setExportFormat] = useState<'pdf' | 'pdf_highlights'>('pdf')
+  const [exportFormat, setExportFormat] = useState<'pdf' | 'pdf_highlights' | 'docx'>('pdf')
 
   async function handleStartExport() {
     const job = await startExport.mutateAsync(exportFormat)
@@ -178,7 +178,7 @@ export default function ProjectWorkspacePage() {
    * handing the browser an object URL (revoked right after) is the correct
    * way to trigger a download for a bearer-token API.
    */
-  async function handleDownloadExport(exportId: string) {
+  async function handleDownloadExport(exportId: string, format: 'pdf' | 'pdf_highlights' | 'docx') {
     setDownloading(true)
     setDownloadError(null)
 
@@ -188,9 +188,10 @@ export default function ProjectWorkspacePage() {
       const response = await api.get(`/exports/${exportId}/download`, { responseType: 'blob' })
       objectUrl = URL.createObjectURL(response.data)
 
+      const extension = format === 'docx' ? 'docx' : 'pdf'
       const link = document.createElement('a')
       link.href = objectUrl
-      link.download = `${project?.name ?? 'export'}.pdf`
+      link.download = `${project?.name ?? 'export'}.${extension}`
       document.body.appendChild(link)
       link.click()
       link.remove()
@@ -230,11 +231,12 @@ export default function ProjectWorkspacePage() {
 
           <select
             value={exportFormat}
-            onChange={(e) => setExportFormat(e.target.value as 'pdf' | 'pdf_highlights')}
+            onChange={(e) => setExportFormat(e.target.value as 'pdf' | 'pdf_highlights' | 'docx')}
             className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-100"
           >
-            <option value="pdf">Compiled notes/excerpts</option>
+            <option value="pdf">Compiled notes/excerpts (PDF)</option>
             <option value="pdf_highlights">Highlighted source PDF</option>
+            <option value="docx">Compiled notes/excerpts (DOCX)</option>
           </select>
           <Button variant="secondary" onClick={handleStartExport} disabled={startExport.isPending}>
             Export
@@ -247,10 +249,10 @@ export default function ProjectWorkspacePage() {
           {exportJob.status === 'ready' ? (
             <button
               className="text-accent hover:underline disabled:opacity-50"
-              onClick={() => handleDownloadExport(exportJob.id)}
+              onClick={() => handleDownloadExport(exportJob.id, exportJob.format)}
               disabled={downloading}
             >
-              {downloading ? 'Downloading…' : 'Export ready — download PDF'}
+              {downloading ? 'Downloading…' : `Export ready — download ${exportJob.format === 'docx' ? 'DOCX' : 'PDF'}`}
             </button>
           ) : exportJob.status === 'failed' ? (
             <span className="text-red-400">Export failed: {exportJob.failure_reason}</span>
