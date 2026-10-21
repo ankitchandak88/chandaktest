@@ -222,6 +222,62 @@ with static methods, no singleton instance). Fixed in
   assets, privacy policy, account deletion flow, billing-policy review) -
   not started; sensible to defer until Phase 8 is actually device-tested.
 
+## MILESTONE (2026-10-21, later same day) — all 7 "wow factor" phases shipped
+
+After the security-audit batch below, the user asked for the full
+feature wishlist from `CLAUDE_IMPLEMENTATION_BRIEF_RESEARCH_SAAS.md`
+Section 15 (previously blocked pending their answers - answers came
+in, then "continue work, sab go hai"). All 7 phases are now done,
+tested, and committed (backend Pest suite: 94 passed; web
+build/lint clean; mobile flutter analyze/test clean):
+
+1. **Mobile review + smoke test** - found and fixed: stale
+   processing-status/project-counts (no refetch), missing pagination
+   ("Load more") on all 4 list endpoints, 401 not forcing re-login.
+2. **Tags** (`b882d4c`... `d62183d`) - project-scoped, multi-tag,
+   `taggables` pivot (same typed-pair pattern as links/workspace_items).
+   Web: chips + picker on every canvas card. Mobile: display only.
+3. **Citations** (`589529b`) - `CitationFormatter` service (APA/MLA),
+   cached per-document, new PATCH /documents/{id} endpoint. Web:
+   CitationEditor on each document card.
+4. **Share links** (`08d20fc`) - password-optional, bounded-expiry
+   (SHARE_LINK_DEFAULT_DAYS/MAX_DAYS), public read-only
+   notes+excerpts view, never the source PDF. Web: ShareManager +
+   public /share/:token route.
+5. **PDF export overlay** (`91a850d`) - new 'pdf_highlights' export
+   format stamps excerpt regions as outlined rects onto the actual
+   source PDF pages via FPDI (no alpha/fill - plain FPDF has no
+   transparency support without injecting raw PDF graphics state).
+6. **AI assistant** (`570fe42`) - `AiProvider` interface, same
+   config-driven-driver pattern as `PaymentProvider`
+   (AI_PROVIDER=fake/openai/anthropic). Summarize (cached), chat
+   (stateless), tag suggestions (suggest-only, never auto-applies).
+   Real providers wired against each API's actual contract and
+   verified with Http::fake(), never against a live key.
+7. **Mobile canvas editing** (`d080ba5`) - 4th "Canvas" tab:
+   drag-to-reposition, tap-to-link, same workspace-items/batch
+   endpoint as web. Found mid-build that saving an excerpt/note on
+   mobile never created a workspace_item (so it could never appear on
+   any canvas, web's included) - fixed. Also found and fixed a real
+   Flutter gesture-arena conflict (ancestor scroll views were eating
+   card drag gestures) by switching to LongPressDraggable.
+
+**Not done / explicitly deferred, not forgotten:**
+- Mobile UI for tags-management, citations, share-links, AI assistant
+  - the APIs are all ready, only the web app has UI for them so far.
+- DOCX export still unimplemented (per the PRD, deferred until a
+  library/format is chosen).
+- Real OpenAI/Anthropic keys have never been tested live - only
+  Http::fake()-verified request/response handling.
+- PDF export highlights are outline-only (no translucent fill) - see
+  PdfHighlightOverlayGenerator's doc comment for why.
+
+**Judgment calls made without being asked first** (flagged to the user
+in-session): 30-day document retention before permanent purge;
+owner-can-set-any-role-but-can't-demote-the-last-owner; share links
+default to 7-day expiry, 90-day cap; AI assistant defaults to a
+deterministic 'fake' provider until an admin sets a real one.
+
 ## PAUSED HERE — resume point (2026-10-21, session paused ~1hr at user's request)
 
 Work since the mobile/emulator pause point below shifted to a **security
