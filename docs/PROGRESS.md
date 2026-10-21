@@ -3,7 +3,7 @@
 Resume point for future sessions. **Read this file first** before continuing.
 Update it after every phase / every meaningful breakpoint.
 
-## BREAKPOINT (2026-10-22) — Annotation/drawing engine in progress, Phase 1 done
+## BREAKPOINT (2026-10-22) — Annotation/drawing engine: Phases 1-3(partial) built, ALL pending live verification
 
 User compared real LiquidText screenshots against the app and found a real
 gap: the backend has a complete `annotations` API (highlight/underline/
@@ -68,15 +68,48 @@ shape on both platforms.
   - draw a pen stroke, confirm it visually lands under your finger, not
   offset. If it's off, the fix is isolated to those two functions.
 
-**Next on resume**: 1) **live-verify Phase 1 AND Phase 2 on the real
-device** (both are implemented but unverified - don't start Phase 3 before
-this, verification debt across phases was explicitly something to avoid).
-2) Phase 3 (Drawing/Document/Workspace mode tabs reorganizing the toolbar
-into the three modes the reference screenshots show, + Outline via
-`pdf.js getOutline()`/Syncfusion bookmarks, + HiLiteView reusing the
-`text` already captured on highlight annotations). 3) Phase 4 (undo/redo,
-AI summarize via existing `AiAssistantService`, bake annotations into the
-PDF export by extending `PdfHighlightOverlayGenerator`). 4) The plan's
+**Phase 3 (partial) — DONE, committed (`573c48d`)**: Outline (PDF's own
+bookmark/TOC tree - web via pdf.js `getOutline()`/`getDestination()`/
+`getPageIndex()`, mobile via the lower-level `PdfDocument.bookmarks` +
+`pages.indexOf(destination.page)`) and HiLiteView (filtered list of
+highlight annotations using their already-captured `text`, no new
+backend). Both read-only, zero backend changes, zero coordinate-math risk
+- deliberately chosen to keep building on **verifiable-later** ground
+while the phone's offline, rather than stacking more unverified frontend
+surface area on top of Phases 1-2's pending verification. NOT done from
+Phase 3: the actual Drawing/Document/Workspace mode-tab restructuring
+(Outline/HiLiteView were added as toggleable additions to the existing
+toolbar, not a reorganization into three tabs) - revisit once Phases 1-2
+are confirmed working, since the mode-tab UI shell is cheap to build but
+pointless to polish before confirming the underlying tools work.
+
+**Verification status going into Phase 4**: everything above (Phases
+1-3) is implemented, passes every automated check available in this
+environment (backend Pest tests, web build+lint, mobile analyze+test,
+backend contract checked directly via curl), but **nothing has been
+visually confirmed on a real device or in a real browser** - the Chrome
+browser tool won't connect in this environment (tried repeatedly all
+session) and the user's phone has been disconnected the entire time
+Phases 1-3 were built. This is real, accumulated verification debt.
+
+**Decision**: rather than keep building more frontend surface area on
+unverified ground, pivoting to the one remaining Phase 4 item that's
+**backend-only and fully self-verifiable without a browser or phone**:
+baking annotations into the PDF export (extending
+`PdfHighlightOverlayGenerator`, same pattern as the existing excerpt-rect
+stamping) - this can be proven with Pest tests + generating a real export
+and inspecting the PDF directly, exactly like BE-009/Phase 12 was earlier
+this session.
+
+**Next on resume, in this order**: 1) **Live-verify Phases 1-3 on the
+real device the moment it reconnects** - this is still the single
+highest-priority item, don't let it keep sliding. Specifically check the
+mobile drawing coordinate mapping (`_pageRectInViewport`/
+`_localToNormalized` in `pdf_reader_screen.dart`) first, since that's the
+piece most likely to need adjustment. 2) Finish Phase 4's remaining
+frontend-dependent items (undo/redo, AI summarize via
+`AiAssistantService`) only after verification, not before. 3) The
+Drawing/Document/Workspace mode-tab restructuring. 4) The plan's
 mandatory final cross-verification table - do not consider this done
 until every row is actually re-tested live, per the user's explicit
 "zero bugs, no compromise" bar.
