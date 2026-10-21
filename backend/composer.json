@@ -12,6 +12,7 @@
         "laravel/sanctum": "^4.3",
         "laravel/scout": "^11.9",
         "laravel/tinker": "^2.10.1",
+        "mpdf/mpdf": "^8.3",
         "predis/predis": "^3.7",
         "razorpay/razorpay": "^2.9",
         "setasign/fpdf": "^1.9",

@@ -4,7 +4,6 @@ namespace App\Services;
 
 use App\Models\Project;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 use setasign\Fpdi\Fpdi;
 
 /**
@@ -26,6 +25,10 @@ class PdfHighlightOverlayGenerator
 {
     private const HIGHLIGHT_COLOR = [250, 204, 21]; // amber-400, matches the web canvas's excerpt chip color
     private const HIGHLIGHT_LINE_WIDTH_MM = 0.6;
+
+    public function __construct(private readonly HtmlToPdfRenderer $htmlToPdf)
+    {
+    }
 
     public function generate(Project $project, string $outputPath): void
     {
@@ -102,28 +105,34 @@ class PdfHighlightOverlayGenerator
         }
     }
 
+    /**
+     * Rendered as its own standalone mPDF document (BE-009: Unicode script
+     * auto-detection, see HtmlToPdfRenderer) and imported into the main
+     * FPDI canvas page-by-page, the same technique appendDocumentPages()
+     * uses for each source document - FPDI can import pages from any valid
+     * PDF, including one mPDF just generated, so this keeps notes'
+     * non-Latin text rendering correctly without mixing two incompatible
+     * low-level drawing APIs on the same page.
+     */
     private function appendNotesSummary(Fpdi $pdf, Project $project): void
     {
-        $pdf->AddPage();
-        $pdf->SetFont('Arial', 'B', 13);
-        $pdf->MultiCell(0, 8, 'Notes');
-        $pdf->SetFont('Arial', '', 11);
+        $html = view('exports.notes-summary', ['notes' => $project->notes])->render();
+        $tmpPath = tempnam(sys_get_temp_dir(), 'notes-summary');
 
-        foreach ($project->notes as $note) {
-            if ($note->title) {
-                $pdf->SetFont('Arial', 'B', 11);
-                $pdf->MultiCell(0, 6, $this->sanitize($note->title));
-                $pdf->SetFont('Arial', '', 11);
+        try {
+            $this->htmlToPdf->render($html, $tmpPath);
+
+            $pageCount = $pdf->setSourceFile($tmpPath);
+
+            for ($pageNumber = 1; $pageNumber <= $pageCount; $pageNumber++) {
+                $templateId = $pdf->importPage($pageNumber);
+                $size = $pdf->getTemplateSize($templateId);
+
+                $pdf->AddPage($size['orientation'], [$size['width'], $size['height']]);
+                $pdf->useTemplate($templateId);
             }
-            $pdf->MultiCell(0, 6, $this->sanitize((string) $note->content));
-            $pdf->Ln(3);
+        } finally {
+            @unlink($tmpPath);
         }
-    }
-
-    private function sanitize(string $text): string
-    {
-        return Str::of($text)
-            ->pipe(fn ($s) => @iconv('UTF-8', 'ISO-8859-1//TRANSLIT', $s) ?: $s)
-            ->toString();
     }
 }

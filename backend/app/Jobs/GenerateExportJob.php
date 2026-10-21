@@ -3,8 +3,8 @@
 namespace App\Jobs;
 
 use App\Models\Export;
+use App\Services\HtmlToPdfRenderer;
 use App\Services\PdfHighlightOverlayGenerator;
-use FPDF;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -12,18 +12,20 @@ use Illuminate\Queue\InteractsWithQueue;
 use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Storage;
-use Illuminate\Support\Str;
 
 /**
  * MVP export scope (docs/01 section 1.4 + docs/10 Phase 5): the default
  * 'pdf' format compiles the project's notes and excerpts — each excerpt
  * annotated with its source document and page — into a single research-
- * output PDF. For 'pdf_highlights' (EXPORT-001), see
- * PdfHighlightOverlayGenerator - that one stamps excerpt regions directly
- * onto the original PDF's pages instead. DOCX export is not implemented
- * yet — the PRD explicitly defers it until a library/formatting scope is
- * chosen, so requesting format=docx fails clearly instead of producing
- * something.
+ * output PDF, rendered via HtmlToPdfRenderer (BE-009: mPDF with Unicode
+ * script auto-detection, not plain FPDF's Latin-1-only core fonts) so
+ * non-Latin text (Hindi, Arabic, Chinese, ...) renders correctly instead
+ * of being transliterated into something unreadable. For 'pdf_highlights'
+ * (EXPORT-001), see PdfHighlightOverlayGenerator - that one stamps excerpt
+ * regions directly onto the original PDF's pages instead. DOCX export is
+ * not implemented yet — the PRD explicitly defers it until a library/
+ * formatting scope is chosen, so requesting format=docx fails clearly
+ * instead of producing something.
  */
 class GenerateExportJob implements ShouldQueue
 {
@@ -64,47 +66,8 @@ class GenerateExportJob implements ShouldQueue
             if ($export->format === 'pdf_highlights') {
                 app(PdfHighlightOverlayGenerator::class)->generate($project, $tmpPath);
             } else {
-                $pdf = new FPDF;
-                $pdf->AddPage();
-                $pdf->SetFont('Arial', 'B', 16);
-                $pdf->MultiCell(0, 10, $this->sanitize($project->name));
-                $pdf->SetFont('Arial', '', 10);
-                $pdf->MultiCell(0, 6, 'Exported '.now()->toDayDateTimeString());
-                $pdf->Ln(4);
-
-                if ($project->excerpts->isNotEmpty()) {
-                    $pdf->SetFont('Arial', 'B', 13);
-                    $pdf->MultiCell(0, 8, 'Excerpts');
-                    $pdf->SetFont('Arial', '', 11);
-
-                    foreach ($project->excerpts as $excerpt) {
-                        $source = $excerpt->document->original_filename ?? 'Unknown source';
-                        $pdf->SetFont('Arial', 'I', 9);
-                        $pdf->MultiCell(0, 5, "Source: {$this->sanitize($source)}, page {$excerpt->page_number}");
-                        $pdf->SetFont('Arial', '', 11);
-                        $pdf->MultiCell(0, 6, $this->sanitize($excerpt->text));
-                        $pdf->Ln(3);
-                    }
-                }
-
-                if ($project->notes->isNotEmpty()) {
-                    $pdf->AddPage();
-                    $pdf->SetFont('Arial', 'B', 13);
-                    $pdf->MultiCell(0, 8, 'Notes');
-                    $pdf->SetFont('Arial', '', 11);
-
-                    foreach ($project->notes as $note) {
-                        if ($note->title) {
-                            $pdf->SetFont('Arial', 'B', 11);
-                            $pdf->MultiCell(0, 6, $this->sanitize($note->title));
-                            $pdf->SetFont('Arial', '', 11);
-                        }
-                        $pdf->MultiCell(0, 6, $this->sanitize((string) $note->content));
-                        $pdf->Ln(3);
-                    }
-                }
-
-                $pdf->Output('F', $tmpPath);
+                $html = view('exports.compiled', ['project' => $project])->render();
+                app(HtmlToPdfRenderer::class)->render($html, $tmpPath);
             }
 
             Storage::disk('local')->put($key, file_get_contents($tmpPath));
@@ -123,14 +86,5 @@ class GenerateExportJob implements ShouldQueue
                 'failure_reason' => 'Export generation failed.',
             ])->save();
         }
-    }
-
-    private function sanitize(string $text): string
-    {
-        // FPDF's core fonts are Latin-1 only; transliterate so UTF-8 source
-        // text (smart quotes, accented characters, etc.) doesn't throw.
-        return Str::of($text)
-            ->pipe(fn ($s) => @iconv('UTF-8', 'ISO-8859-1//TRANSLIT', $s) ?: $s)
-            ->toString();
     }
 }

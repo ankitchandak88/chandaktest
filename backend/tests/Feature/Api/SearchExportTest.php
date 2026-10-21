@@ -97,6 +97,37 @@ test('an export job produces a ready, downloadable PDF', function () {
         ->assertHeader('content-type', 'application/pdf');
 });
 
+// BE-009 - end-to-end through the real API, not just the renderer in
+// isolation: a note with Hindi content must survive a compiled export.
+test('a compiled export preserves Hindi note content instead of mangling it', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+
+    $hindiText = 'भारत एक सुंदर देश है।';
+    \App\Models\Note::create([
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'title' => 'Hindi note',
+        'content' => $hindiText,
+    ]);
+
+    $export = apiPost("/api/v1/projects/{$projectId}/exports", [], $headers);
+    $export->assertAccepted();
+    $exportId = $export->json('data.id');
+
+    expect(apiGet("/api/v1/exports/{$exportId}", $headers)->json('data.status'))->toBe('ready');
+
+    $pdfBytes = apiGet("/api/v1/exports/{$exportId}/download", $headers)->streamedContent();
+    $tmpPath = tempnam(sys_get_temp_dir(), 'hindi-export-test');
+    file_put_contents($tmpPath, $pdfBytes);
+
+    $extracted = (new \Smalot\PdfParser\Parser)->parseFile($tmpPath)->getText();
+    expect($extracted)->toContain($hindiText);
+
+    @unlink($tmpPath);
+});
+
 // EXPORT-001
 test('a pdf_highlights export job stamps the source pdf and produces a ready, downloadable file', function () {
     \Illuminate\Support\Facades\Storage::fake('local');
