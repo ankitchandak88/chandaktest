@@ -1,4 +1,5 @@
 import 'package:dio/dio.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Single Dio client for the whole app, mirroring web/src/lib/api.ts:
@@ -38,6 +39,12 @@ class ApiClient {
         onError: (error, handler) async {
           if (error.response?.statusCode == 401) {
             await _storage.delete(key: 'token');
+            // Without this, a token that expires mid-session (SANCTUM_TOKEN_
+            // EXPIRATION_MINUTES - see backend/config/sanctum.php) just
+            // produces "Unauthenticated." errors on every subsequent screen
+            // until the user force-closes and reopens the app. onUnauthorized
+            // lets AuthProvider flip back to the login screen immediately.
+            onUnauthorized?.call();
           }
           handler.next(error);
         },
@@ -49,6 +56,11 @@ class ApiClient {
 
   late final Dio _dio;
   final _storage = const FlutterSecureStorage();
+
+  /// Set by AuthProvider at startup so the Dio error interceptor (which has
+  /// no access to the widget tree / Provider context) can still force a
+  /// logout when any request comes back 401.
+  VoidCallback? onUnauthorized;
 
   Dio get dio => _dio;
 

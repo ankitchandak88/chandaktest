@@ -14,6 +14,8 @@ class AuthProvider extends ChangeNotifier {
   String? activeOrganizationId;
 
   Future<void> bootstrap() async {
+    ApiClient.instance.onUnauthorized = _handleUnauthorized;
+
     final token = await ApiClient.instance.token;
     if (token == null) {
       status = AuthStatus.unauthenticated;
@@ -96,5 +98,18 @@ class AuthProvider extends ChangeNotifier {
     activeOrganizationId = null;
     status = AuthStatus.unauthenticated;
     notifyListeners();
+  }
+
+  // The interceptor already deleted the stored token (see ApiClient); this
+  // just syncs in-memory state so the UI actually drops back to the login
+  // screen instead of continuing to show 401 errors on every action.
+  void _handleUnauthorized() {
+    if (status == AuthStatus.authenticated) {
+      user = null;
+      organizations = [];
+      activeOrganizationId = null;
+      status = AuthStatus.unauthenticated;
+      notifyListeners();
+    }
   }
 }

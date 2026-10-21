@@ -1,3 +1,30 @@
+/// Pagination metadata matching the backend's standard paginated envelope
+/// (`{data: [...], meta: {current_page, last_page, total, ...}}`) - see
+/// web/src/lib/queries.ts's useInfiniteQuery conversion (BUG-006) for the
+/// same fix applied there.
+class PageMeta {
+  final int currentPage;
+  final int lastPage;
+  final int total;
+
+  PageMeta({required this.currentPage, required this.lastPage, required this.total});
+
+  factory PageMeta.fromJson(Map<String, dynamic> json) => PageMeta(
+        currentPage: json['current_page'] as int,
+        lastPage: json['last_page'] as int,
+        total: json['total'] as int,
+      );
+
+  bool get hasMore => currentPage < lastPage;
+}
+
+class Paginated<T> {
+  final List<T> data;
+  final PageMeta meta;
+
+  Paginated({required this.data, required this.meta});
+}
+
 class AuthUser {
   final int id;
   final String name;

@@ -14,7 +14,11 @@ class ProjectsScreen extends StatefulWidget {
 }
 
 class _ProjectsScreenState extends State<ProjectsScreen> {
-  late Future<List<Project>> _projects;
+  List<Project> _projects = [];
+  PageMeta? _meta;
+  bool _loading = true;
+  bool _loadingMore = false;
+  Object? _error;
   UsageSummary? _usage;
 
   @override
@@ -23,11 +27,56 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
     _load();
   }
 
-  void _load() {
-    _projects = ProjectApi.listProjects();
+  Future<void> _load() async {
+    setState(() {
+      _loading = true;
+      _error = null;
+    });
+
+    try {
+      final result = await ProjectApi.listProjects();
+      if (!mounted) return;
+      setState(() {
+        _projects = result.data;
+        _meta = result.meta;
+        _loading = false;
+      });
+    } catch (err) {
+      if (!mounted) return;
+      setState(() {
+        _error = err;
+        _loading = false;
+      });
+    }
+
     ProjectApi.usage().then((u) {
       if (mounted) setState(() => _usage = u);
     }).catchError((_) {});
+  }
+
+  // BUG-006 (mobile): the backend has always paginated this endpoint (20
+  // per page), same as the web app before its fix - without this, any
+  // project beyond the 20th is invisible with no indication more exist.
+  Future<void> _loadMore() async {
+    final meta = _meta;
+    if (meta == null || !meta.hasMore || _loadingMore) return;
+
+    setState(() => _loadingMore = true);
+    try {
+      final result = await ProjectApi.listProjects(page: meta.currentPage + 1);
+      if (!mounted) return;
+      setState(() {
+        _projects = [..._projects, ...result.data];
+        _meta = result.meta;
+        _loadingMore = false;
+      });
+    } catch (err) {
+      if (!mounted) return;
+      setState(() => _loadingMore = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(apiErrorMessage(err))),
+      );
+    }
   }
 
   Future<void> _createProject() async {
@@ -55,7 +104,7 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
 
     try {
       await ProjectApi.createProject(name);
-      setState(_load);
+      _load();
     } catch (err) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -81,61 +130,65 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
         child: const Icon(Icons.add),
       ),
       body: RefreshIndicator(
-        onRefresh: () async => setState(_load),
-        child: FutureBuilder<List<Project>>(
-          future: _projects,
-          builder: (context, snapshot) {
-            if (snapshot.connectionState == ConnectionState.waiting) {
-              return const Center(child: CircularProgressIndicator());
-            }
-            if (snapshot.hasError) {
-              return Center(child: Text(apiErrorMessage(snapshot.error!)));
-            }
-
-            final projects = snapshot.data ?? [];
-
-            return ListView(
-              padding: const EdgeInsets.all(16),
-              children: [
-                if (_usage != null)
-                  Padding(
-                    padding: const EdgeInsets.only(bottom: 12),
-                    child: Text(
-                      '${_usage!.projectsUsed} / ${_usage!.projectsLimit} projects on the '
-                      '${_usage!.plan} plan',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+        onRefresh: _load,
+        child: _loading
+            ? const Center(child: CircularProgressIndicator())
+            : _error != null
+                ? Center(child: Text(apiErrorMessage(_error!)))
+                : ListView(
+                    padding: const EdgeInsets.all(16),
+                    children: [
+                      if (_usage != null)
+                        Padding(
+                          padding: const EdgeInsets.only(bottom: 12),
+                          child: Text(
+                            '${_usage!.projectsUsed} / ${_usage!.projectsLimit} projects on the '
+                            '${_usage!.plan} plan',
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      if (_projects.isEmpty)
+                        const Padding(
+                          padding: EdgeInsets.only(top: 48),
+                          child: Center(child: Text('No projects yet. Tap + to create one.')),
+                        ),
+                      for (final project in _projects)
+                        Card(
+                          child: ListTile(
+                            title: Text(project.name),
+                            subtitle: Text(
+                              '${project.documentsCount} documents · ${project.excerptsCount} excerpts · '
+                              '${project.notesCount} notes',
+                            ),
+                            trailing: const Icon(Icons.chevron_right),
+                            onTap: () async {
+                              // Document/excerpt/note counts can change while
+                              // the user is inside the project (upload, add
+                              // note, etc.) - refresh this list on return
+                              // rather than showing stale counts indefinitely.
+                              await Navigator.of(context).push(
+                                MaterialPageRoute(
+                                  builder: (_) => ProjectDetailScreen(project: project),
+                                ),
+                              );
+                              if (mounted) _load();
+                            },
+                          ),
+                        ),
+                      if (_meta?.hasMore ?? false)
+                        Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 16),
+                          child: Center(
+                            child: _loadingMore
+                                ? const CircularProgressIndicator()
+                                : OutlinedButton(
+                                    onPressed: _loadMore,
+                                    child: Text('Load more (${_projects.length} of ${_meta!.total})'),
+                                  ),
+                          ),
+                        ),
+                    ],
                   ),
-                if (projects.isEmpty)
-                  const Padding(
-                    padding: EdgeInsets.only(top: 48),
-                    child: Center(child: Text('No projects yet. Tap + to create one.')),
-                  ),
-                for (final project in projects)
-                  Card(
-                    child: ListTile(
-                      title: Text(project.name),
-                      subtitle: Text(
-                        '${project.documentsCount} documents · ${project.excerptsCount} excerpts · '
-                        '${project.notesCount} notes',
-                      ),
-                      trailing: const Icon(Icons.chevron_right),
-                      onTap: () async {
-                        // Document/excerpt/note counts can change while the
-                        // user is inside the project (upload, add note,
-                        // etc.) - refresh this list on return rather than
-                        // showing stale counts indefinitely.
-                        await Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => ProjectDetailScreen(project: project)),
-                        );
-                        if (mounted) setState(_load);
-                      },
-                    ),
-                  ),
-              ],
-            );
-          },
-        ),
       ),
     );
   }
