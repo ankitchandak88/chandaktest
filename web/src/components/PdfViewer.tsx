@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback, useMemo } from 'react'
+import { useEffect, useRef, useState, useCallback, useMemo, memo } from 'react'
 import { getStroke } from 'perfect-freehand'
 import { pdfjsLib } from '@/lib/pdf'
 import { api } from '@/lib/api'
@@ -48,7 +48,10 @@ const HIGHLIGHT_COLOR = '#facc15'
 const UNDERLINE_COLOR = '#38bdf8'
 const COMMENT_COLOR = '#f472b6'
 
-const PEN_COLORS = ['#f8fafc', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b']
+// Default (first) color must be visible against a white PDF page - code
+// review caught that both platforms defaulted to a near-white pen color,
+// which made the very first stroke a new user draws effectively invisible.
+const PEN_COLORS = ['#1e293b', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b']
 const HIGHLIGHTER_COLORS = ['#facc15', '#4ade80', '#60a5fa', '#f472b6', '#fb923c']
 const PEN_SIZE = 0.004
 const HIGHLIGHTER_SIZE = 0.016
@@ -66,6 +69,20 @@ function strokeToSvgPath(points: [number, number, number][], sizeFraction: numbe
     streamline: 0.5,
   })
   return getSvgPathFromStroke(outline)
+}
+
+// Shortest distance from a point to the segment [a, b], not just to a and
+// b themselves - code review caught that checking only the stroke's
+// stored sample points let a fast/sparse stroke have a visually
+// continuous middle span with no erase hit-test coverage at all.
+function distanceToSegment(p: { x: number; y: number }, a: { x: number; y: number }, b: { x: number; y: number }) {
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  const lengthSquared = dx * dx + dy * dy
+  const t = lengthSquared === 0 ? 0 : Math.max(0, Math.min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / lengthSquared))
+  const closestX = a.x + t * dx
+  const closestY = a.y + t * dy
+  return Math.hypot(p.x - closestX, p.y - closestY)
 }
 
 // Standard ray-casting point-in-polygon test for the lasso tool.
@@ -396,9 +413,14 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
           let hit = false
           if (a.type === 'ink') {
             const points = (a.payload.points as [number, number, number][] | undefined) ?? []
-            hit = points.some(
-              ([px, py]) =>
-                Math.hypot((px - point.x) * pageSize.width, (py - point.y) * pageSize.height) < thresholdPx,
+            const pixelPoints = points.map(([px, py]) => ({ x: px * pageSize.width, y: py * pageSize.height }))
+            const pointerPx = { x: point.x * pageSize.width, y: point.y * pageSize.height }
+            // Distance to each *segment*, not just each stored sample
+            // point - a fast/sparse stroke can have a visually continuous
+            // span between two stored points that's nowhere near either
+            // point itself.
+            hit = pixelPoints.some(
+              (p, i) => i > 0 && distanceToSegment(pointerPx, pixelPoints[i - 1], p) < thresholdPx,
             )
           } else if (a.type === 'highlight' || a.type === 'underline') {
             const rects = (a.payload.rects as SourceRect[] | undefined) ?? []
@@ -739,6 +761,50 @@ function ToolButton({
   )
 }
 
+// Memoized separately from PdfPage (code review finding: without this, every
+// pointer-move frame of an in-progress stroke re-rendered PdfPage and
+// recomputed getStroke() for *every* existing ink annotation on the page,
+// not just the active one, going O(existing ink strokes) per drag frame
+// instead of O(1)). React.memo on PdfPage itself wouldn't have helped here -
+// onStrokeMove's reference legitimately changes every frame (it closes over
+// the in-progress activeStroke) - so memoizing at this finer grain, where
+// `annotation`/`pageSize` stay referentially stable for every stroke except
+// the one actively being drawn, is what actually avoids the recomputation.
+const InkStrokePath = memo(function InkStrokePath({
+  annotation,
+  pageSize,
+  selected,
+  deletable,
+  onDelete,
+}: {
+  annotation: Annotation
+  pageSize: { width: number; height: number }
+  selected: boolean
+  deletable: boolean
+  onDelete: () => void
+}) {
+  const payload = annotation.payload as unknown as InkPayload
+  const path = useMemo(
+    () => strokeToSvgPath(payload.points, payload.size, pageSize),
+    [payload.points, payload.size, pageSize],
+  )
+
+  return (
+    <path
+      d={path}
+      fill={annotation.color ?? '#f8fafc'}
+      opacity={payload.tool === 'highlighter' ? 0.4 : 1}
+      stroke={selected ? '#38bdf8' : 'none'}
+      strokeWidth={2}
+      className="pointer-events-auto cursor-pointer"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (deletable) onDelete()
+      }}
+    />
+  )
+})
+
 function ColorSwatches({
   colors,
   active,
@@ -982,21 +1048,14 @@ function PdfPage({
             }
 
             if (a.type === 'ink') {
-              const payload = a.payload as unknown as InkPayload
-              const path = strokeToSvgPath(payload.points, payload.size, size)
               return (
-                <path
+                <InkStrokePath
                   key={a.id}
-                  d={path}
-                  fill={a.color ?? '#f8fafc'}
-                  opacity={payload.tool === 'highlighter' ? 0.4 : 1}
-                  stroke={isLassoSelected ? '#38bdf8' : 'none'}
-                  strokeWidth={2}
-                  className="pointer-events-auto cursor-pointer"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    if (tool === 'select') onDeleteAnnotation(a.id)
-                  }}
+                  annotation={a}
+                  pageSize={size}
+                  selected={isLassoSelected}
+                  deletable={tool === 'select'}
+                  onDelete={() => onDeleteAnnotation(a.id)}
                 />
               )
             }
