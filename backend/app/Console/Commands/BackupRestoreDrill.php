@@ -92,7 +92,16 @@ class BackupRestoreDrill extends Command
     private function extractDatabaseDump(string $zipPath, string $workDir): ?string
     {
         $zip = new ZipArchive;
-        $zip->open($zipPath);
+        $result = $zip->open($zipPath);
+
+        if ($result !== true) {
+            // Without this check, a corrupt/truncated zip silently proceeds
+            // as if it opened, finds no db-dumps entry (there's nothing to
+            // find), and reports the generic "no dump found" below - which
+            // masks the actual problem (a corrupt backup file) this drill
+            // specifically exists to catch.
+            throw new \RuntimeException("Could not open backup zip '{$zipPath}' (ZipArchive error code {$result}) - the backup file may be corrupt or truncated.");
+        }
 
         $dumpEntry = null;
         for ($i = 0; $i < $zip->numFiles; $i++) {
@@ -161,14 +170,27 @@ class BackupRestoreDrill extends Command
         $liveDatabase = config('database.connections.mysql.database');
         $pdo = DB::connection()->getPdo();
 
-        $tables = $pdo->query('SHOW TABLES')->fetchAll(PDO::FETCH_COLUMN);
+        // Union of tables on *both* sides, not just the live database's
+        // list - querying a live-only table name against the restored DB
+        // (or vice versa) would throw (the table genuinely doesn't exist
+        // there), crashing the whole drill instead of reporting it as the
+        // mismatch it is. This also catches the reverse drift the
+        // live-only list missed entirely: a table still present in an
+        // older restore that's since been dropped/renamed on live.
+        $liveTables = $pdo->query("SHOW TABLES FROM `{$liveDatabase}`")->fetchAll(PDO::FETCH_COLUMN);
+        $restoredTables = $pdo->query("SHOW TABLES FROM `{$this->scratchDatabase}`")->fetchAll(PDO::FETCH_COLUMN);
+        $allTables = array_unique([...$liveTables, ...$restoredTables]);
 
         $liveCounts = [];
         $restoredCounts = [];
 
-        foreach ($tables as $table) {
-            $liveCounts[$table] = (int) $pdo->query("SELECT COUNT(*) FROM `{$liveDatabase}`.`{$table}`")->fetchColumn();
-            $restoredCounts[$table] = (int) $pdo->query("SELECT COUNT(*) FROM `{$this->scratchDatabase}`.`{$table}`")->fetchColumn();
+        foreach ($allTables as $table) {
+            $liveCounts[$table] = in_array($table, $liveTables, true)
+                ? (int) $pdo->query("SELECT COUNT(*) FROM `{$liveDatabase}`.`{$table}`")->fetchColumn()
+                : 0;
+            $restoredCounts[$table] = in_array($table, $restoredTables, true)
+                ? (int) $pdo->query("SELECT COUNT(*) FROM `{$this->scratchDatabase}`.`{$table}`")->fetchColumn()
+                : 0;
         }
 
         return self::mismatchesBetween($liveCounts, $restoredCounts);
