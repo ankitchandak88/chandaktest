@@ -127,7 +127,11 @@ class PdfHighlightOverlayGenerator
      */
     private function drawAnnotation(Fpdi $pdf, $annotation, float $pageWidth, float $pageHeight): void
     {
-        [$r, $g, $b] = $this->hexToRgb($annotation->color) ?? self::HIGHLIGHT_COLOR;
+        // Falls back per-type (not always the amber highlight color -
+        // code review caught that a colorless underline/ink/comment, a
+        // legal API call since `color` is nullable, previously got stamped
+        // in highlight-amber regardless of what it actually was).
+        [$r, $g, $b] = $this->hexToRgb($annotation->color) ?? $this->defaultColorFor($annotation->type);
 
         if ($annotation->type === 'highlight' || $annotation->type === 'underline') {
             $pdf->SetDrawColor($r, $g, $b);
@@ -146,7 +150,17 @@ class PdfHighlightOverlayGenerator
                 }
             }
         } elseif ($annotation->type === 'ink') {
-            $points = $annotation->payload['points'] ?? [];
+            // Defensively validated (code review caught this): a
+            // malformed/truncated point (missing an x or y coordinate) is
+            // a legitimately reachable stored value, since the backend
+            // only validates `payload` as a generic array with no nested
+            // structural rules on `points` - skip just that one bad point
+            // rather than let a missing-array-key warning (which Laravel
+            // escalates to a thrown ErrorException) fail the whole export.
+            $points = array_values(array_filter(
+                $annotation->payload['points'] ?? [],
+                fn ($p) => is_array($p) && array_key_exists(0, $p) && array_key_exists(1, $p) && is_numeric($p[0]) && is_numeric($p[1])
+            ));
             $strokeSize = (float) ($annotation->payload['size'] ?? 0.004);
 
             $pdf->SetDrawColor($r, $g, $b);
@@ -168,6 +182,16 @@ class PdfHighlightOverlayGenerator
             $pdf->SetFillColor($r, $g, $b);
             $pdf->Rect($x - $markerSize / 2, $y - $markerSize / 2, $markerSize, $markerSize, 'F');
         }
+    }
+
+    private function defaultColorFor(string $type): array
+    {
+        return match ($type) {
+            'underline' => [56, 189, 248], // sky-400, matches web's UNDERLINE_COLOR
+            'comment' => [244, 114, 182], // pink-400, matches web's COMMENT_COLOR
+            'ink' => [30, 41, 59], // slate-800, matches the pen tool's own default color
+            default => self::HIGHLIGHT_COLOR, // 'highlight' and any future/unknown type
+        };
     }
 
     private function hexToRgb(?string $hex): ?array

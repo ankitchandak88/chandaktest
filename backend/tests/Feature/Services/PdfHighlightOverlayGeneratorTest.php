@@ -123,6 +123,80 @@ test('highlight, underline, ink, and comment annotations are stamped without err
     @unlink($outputPath);
 });
 
+// Code review findings, both regression-tested directly against the real
+// renderer rather than just inspected manually.
+test('a malformed ink point (missing a coordinate) is skipped, not fatal', function () {
+    Storage::fake('local');
+
+    ['user' => $user, 'organization' => $organization] = registerUser();
+    $project = Project::create([
+        'organization_id' => $organization->id,
+        'created_by' => $user->id,
+        'name' => 'Malformed ink test',
+    ]);
+
+    $document = createReadyDocument($project, $user->id);
+    Storage::disk('local')->put($document->storage_key, minimalPdfBytes());
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'ink',
+        'color' => '#1e293b',
+        'payload' => [
+            // Second point is missing its y-coordinate entirely.
+            'points' => [[0.1, 0.1, 0.5], [0.2], [0.3, 0.12, 0.5]],
+            'size' => 0.004,
+            'tool' => 'pen',
+        ],
+    ]);
+
+    $outputPath = tempnam(sys_get_temp_dir(), 'overlay-malformed-ink-test');
+
+    app(PdfHighlightOverlayGenerator::class)
+        ->generate($project->fresh(['documents', 'excerpts', 'notes', 'annotations']), $outputPath);
+
+    expect(file_exists($outputPath))->toBeTrue();
+    expect(substr(file_get_contents($outputPath), 0, 5))->toBe('%PDF-');
+
+    @unlink($outputPath);
+});
+
+test('annotations without an explicit color fall back per-type, not always to highlight-amber', function () {
+    Storage::fake('local');
+
+    ['user' => $user, 'organization' => $organization] = registerUser();
+    $project = Project::create([
+        'organization_id' => $organization->id,
+        'created_by' => $user->id,
+        'name' => 'Default color test',
+    ]);
+
+    $document = createReadyDocument($project, $user->id);
+    Storage::disk('local')->put($document->storage_key, minimalPdfBytes());
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'underline',
+        'color' => null,
+        'payload' => ['rects' => [['x' => 0.1, 'y' => 0.2, 'width' => 0.3, 'height' => 0.02]], 'text' => 'x'],
+    ]);
+
+    $generator = app(PdfHighlightOverlayGenerator::class);
+    $reflection = new ReflectionMethod($generator, 'defaultColorFor');
+    $reflection->setAccessible(true);
+
+    expect($reflection->invoke($generator, 'highlight'))->toBe([250, 204, 21]);
+    expect($reflection->invoke($generator, 'underline'))->not->toBe([250, 204, 21]);
+    expect($reflection->invoke($generator, 'comment'))->not->toBe([250, 204, 21]);
+    expect($reflection->invoke($generator, 'ink'))->not->toBe([250, 204, 21]);
+});
+
 test('a document with no file on disk yet is silently skipped, not a failure', function () {
     Storage::fake('local');
 
