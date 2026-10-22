@@ -3,7 +3,7 @@
 Resume point for future sessions. **Read this file first** before continuing.
 Update it after every phase / every meaningful breakpoint.
 
-## BREAKPOINT (2026-10-22) — Annotation/drawing engine: Phases 1-3(partial) built, ALL pending live verification
+## BREAKPOINT (2026-10-22) — Annotation/drawing engine: Phases 1-4(partial) built + code-reviewed, ALL pending live verification
 
 User compared real LiquidText screenshots against the app and found a real
 gap: the backend has a complete `annotations` API (highlight/underline/
@@ -125,17 +125,56 @@ drawing tool to establish the top-aligned state the math now assumes.
 This is a genuine improvement, but **does not replace live verification**
 - it increases confidence, it isn't proof.
 
+**Independent `/code-review high` pass (commits `ba9aee7..e2950e8`,
+covering Phase 14's Sentry/ops work through Phase 4's export-baking) -
+10 findings, all CONFIRMED by a verifier reading actual post-diff file
+content, all fixed and committed**:
+1. **Most severe**: mobile ink strokes were only ever painted by the
+   CustomPaint overlay, mounted exclusively while a drawing tool was
+   active - switching to "Select" to just read made every pen/
+   highlighter stroke disappear from view (still saved, just not
+   shown). Fixed (`c36498f`) by forcing single-page layout mode at all
+   times and always mounting the ink overlay, gating only the pointer-
+   capture gesture detector behind an active tool.
+2. Mobile drawing coordinates ignored `zoomLevel` entirely - fixed
+   (`c36498f`), folded into the fit-scale, zoom reset to 1.0 alongside
+   the existing scroll reset when entering a drawing tool.
+3. Pen tool defaulted to a near-white color on both platforms,
+   effectively invisible on first use - fixed (`71d6242`, `c36498f`).
+4. `BackupRestoreDrill` crashed on a dropped/renamed table and never
+   checked `ZipArchive::open()`'s return value - fixed (`a70c147`),
+   re-verified for real against the live database afterward.
+5. Export-time malformed ink points crashed the whole export; colorless
+   annotations always stamped in highlight-amber regardless of type -
+   both fixed (`bca296b`) with new regression tests + a manual visual
+   check.
+6. Mobile's optimistic annotation delete had no rollback on failure -
+   fixed (`c36498f`) by re-syncing from the server instead.
+7. Eraser hit-testing (both platforms) only checked distance to stored
+   sample points, not the segments between them, missing fast/sparse
+   strokes - fixed (`71d6242`, `c36498f`) with a proper point-to-segment
+   distance check.
+8. Both platforms recomputed every existing ink stroke's path on every
+   drag frame instead of just the active one - fixed (`71d6242` via a
+   memoized per-stroke sub-component, `c36498f` via a State-owned path
+   cache).
+
+Full backend suite: 113 passed. Web build/lint clean. Mobile analyze/
+test clean, arm64 debug APK builds. **None of this replaces live device
+verification** - it closes real gaps found by careful review, but the
+phone still hasn't reconnected this entire session.
+
 **Next on resume, in this order**: 1) **Live-verify Phases 1-4 on the
 real device the moment it reconnects** - this is still the single
-highest-priority item, don't let it keep sliding. The mobile drawing
-coordinate mapping has now been corrected once via review but is still
-unconfirmed on real hardware - check it first. 2) Finish Phase 4's
-remaining frontend-dependent items (undo/redo, AI summarize via
-`AiAssistantService`) only after verification, not before. 3) The
-Drawing/Document/Workspace mode-tab restructuring. 4) The plan's
-mandatory final cross-verification table - do not consider this done
-until every row is actually re-tested live, per the user's explicit
-"zero bugs, no compromise" bar.
+highest-priority item, don't let it keep sliding. Both the mobile
+drawing coordinate mapping and today's 10 code-review fixes have been
+corrected via review/static analysis but are still unconfirmed on real
+hardware - check them first. 2) Finish Phase 4's remaining frontend-
+dependent items (undo/redo, AI summarize via `AiAssistantService`) only
+after verification, not before. 3) The Drawing/Document/Workspace
+mode-tab restructuring. 4) The plan's mandatory final cross-verification
+table - do not consider this done until every row is actually re-tested
+live, per the user's explicit "zero bugs, no compromise" bar.
 
 ## Decisions locked in (do not re-ask)
 - DB: **MySQL** (Laragon `mysql-8.0.30-winx64`, root / no password). Databases:
