@@ -19,7 +19,10 @@ enum _AnnotationTool { select, comment, pen, highlighter, eraser, lasso }
 bool _isDrawingTool(_AnnotationTool tool) =>
     tool == _AnnotationTool.pen || tool == _AnnotationTool.highlighter || tool == _AnnotationTool.eraser || tool == _AnnotationTool.lasso;
 
-const _penColors = [Colors.white, Colors.redAccent, Colors.blueAccent, Colors.greenAccent, Colors.amber];
+// Default (first) color must be visible against a white PDF page - code
+// review caught that both platforms defaulted to a near-white pen color,
+// which made the very first stroke a new user draws effectively invisible.
+const _penColors = [Color(0xFF1E293B), Colors.redAccent, Colors.blueAccent, Colors.greenAccent, Colors.amber];
 const _highlighterColors = [Colors.yellow, Colors.lightGreenAccent, Colors.lightBlueAccent, Colors.pinkAccent, Colors.orangeAccent];
 const _penSize = 0.004;
 const _highlighterSize = 0.016;
@@ -78,6 +81,7 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   final List<Offset> _lassoPoints = [];
   final Set<String> _erasedThisDrag = {};
   List<String>? _lassoSelection;
+  final Map<String, _CachedInkPath> _inkPathCache = {};
 
   @override
   void initState() {
@@ -337,12 +341,33 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
       _controller.removeAnnotation(live);
       _backendIdByLiveAnnotation.remove(live);
     }
+    _inkPathCache.remove(backendId);
     setState(() => _annotations = _annotations.where((a) => a.id != backendId).toList());
 
     ProjectApi.deleteAnnotation(backendId).catchError((err) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(apiErrorMessage(err))));
+      // Code review finding: this is an optimistic removal (state/viewer
+      // already updated above, before the backend call resolves) with no
+      // rollback on failure - during an eraser drag or a lasso bulk-delete
+      // (both loop-call this), a transient network error on one of several
+      // DELETE calls would otherwise remove that one annotation from the
+      // UI permanently for the session while the backend still has it.
+      // Re-syncing from the server (rather than trying to surgically
+      // reconstruct the one removed native Annotation object) corrects
+      // local state back to whatever's actually true server-side.
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${apiErrorMessage(err)} Re-syncing annotations.')),
+      );
+      _resyncAnnotations();
     });
+  }
+
+  Future<void> _resyncAnnotations() async {
+    _controller.removeAllAnnotations();
+    _backendIdByLiveAnnotation.clear();
+    _liveAnnotationByBackendId.clear();
+    _inkPathCache.clear();
+    await _loadAnnotations();
   }
 
   Future<void> _saveExcerpt() async {
@@ -404,32 +429,39 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
   }
 
   // Maps a point local to the drawing overlay (same size as the viewport,
-  // single-page layout mode forced while any drawing tool is active, see
-  // build()) to 0-1 page-normalized coordinates.
+  // single-page layout mode, see build()) to 0-1 page-normalized
+  // coordinates.
   //
   // Confirmed via Syncfusion's own source (single_page_view.dart /
-  // pdfviewer.dart's `greyAreaSize`/`heightPercentage` handling - zoomLevel
-  // is hard-floored at 1.0, see `_minScale`) that single-page mode at
-  // zoom=1.0 fits the page to the viewport's *width* exactly (not
-  // width-and-height "contain" - that was this function's original, wrong
-  // assumption): offsetX is always 0, and offsetY is a *centered* grey
-  // margin only when the page is shorter than the viewport at that width-
-  // fit scale. When the page is *taller* than the viewport (common for a
-  // portrait page on a phone screen), Syncfusion allows the user to pan
-  // within it, and that pan offset isn't exposed by any public API - so
-  // this deliberately assumes offsetY=0 (top-aligned, no pan yet) for that
-  // case, which `build()` forces to be true by calling
-  // `_controller.jumpToPage` fresh every time a drawing tool is selected
-  // (jumping to a page resets it to the top). The known, narrow gap this
-  // leaves: panning *within* an overflowing page while a drawing tool is
-  // already active, then drawing, can still misalign - not yet
+  // pdfviewer.dart's `greyAreaSize`/`heightPercentage` handling) that
+  // single-page mode at zoomLevel=1.0 fits the page to the viewport's
+  // *width* exactly (not width-and-height "contain" - that was this
+  // function's original, wrong assumption): offsetX is always 0 at that
+  // zoom, and offsetY is a *centered* grey margin only when the page is
+  // shorter than the viewport at that width-fit scale. `zoomLevel` is
+  // folded in multiplicatively (code-review finding: the original version
+  // ignored it entirely, so pinch-zooming before switching to a drawing
+  // tool misaligned every subsequent stroke) so the overlay's *scale*
+  // always tracks the live zoom (`build()` listens via
+  // `onZoomLevelChanged` and rebuilds). What zooming still doesn't give us
+  // is the resulting *pan* offset once zoomed/tall content overflows the
+  // viewport - Syncfusion exposes no public API for a single page's
+  // current pan position - so this deliberately assumes offsetY=0/no pan
+  // in that case, which `build()` establishes as true for actual drawing
+  // by resetting both scroll (`jumpToPage`) and zoom (`zoomLevel = 1.0`)
+  // every time a drawing tool is selected. The known, narrow gap this
+  // leaves: zooming in or panning within an overflowing page *while
+  // passively reading* (not drawing) can still show already-saved ink
+  // slightly offset until zoom is reset back to 1.0 - not yet
   // live-verified on a real device (see docs/PROGRESS.md); recalibrate
   // here first if a stroke doesn't land under the finger.
   Rect _pageRectInViewport(Size viewport, Size pageSize) {
-    final scale = viewport.width / pageSize.width;
+    final scale = (viewport.width / pageSize.width) * _controller.zoomLevel;
+    final displayedW = pageSize.width * scale;
     final displayedH = pageSize.height * scale;
+    final offsetX = displayedW <= viewport.width ? (viewport.width - displayedW) / 2 : 0.0;
     final offsetY = displayedH <= viewport.height ? (viewport.height - displayedH) / 2 : 0.0;
-    return Rect.fromLTWH(0, offsetY, viewport.width, displayedH);
+    return Rect.fromLTWH(offsetX, offsetY, displayedW, displayedH);
   }
 
   Offset? _localToNormalized(Offset local, Size viewport, int pageNumber) {
@@ -476,13 +508,21 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
         bool hit = false;
         if (a.type == 'ink') {
           final points = (a.payload['points'] as List?) ?? [];
-          hit = points.any((p) {
-            final px = (p[0] as num).toDouble();
-            final py = (p[1] as num).toDouble();
-            final dx = (px - n.dx) * pageRect.width;
-            final dy = (py - n.dy) * pageRect.height;
-            return (dx * dx + dy * dy) < thresholdPx * thresholdPx;
-          });
+          final pixelPoints = points
+              .map((p) => Offset((p[0] as num).toDouble() * pageRect.width, (p[1] as num).toDouble() * pageRect.height))
+              .toList();
+          final pointerPx = Offset(n.dx * pageRect.width, n.dy * pageRect.height);
+          // Distance to each *segment*, not just each stored sample point
+          // (code review finding) - a fast/sparse stroke can have a
+          // visually continuous span between two stored points that's
+          // nowhere near either point itself.
+          hit = false;
+          for (var i = 1; i < pixelPoints.length; i++) {
+            if (_distanceToSegment(pointerPx, pixelPoints[i - 1], pixelPoints[i]) < thresholdPx) {
+              hit = true;
+              break;
+            }
+          }
         } else if (a.type == 'highlight' || a.type == 'underline') {
           final rects = (a.payload['rects'] as List?) ?? [];
           hit = rects.any((r) {
@@ -568,6 +608,18 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     return null;
   }
 
+  // Shortest distance from a point to the segment [a, b] - matches web's
+  // identical helper in PdfViewer.tsx.
+  double _distanceToSegment(Offset p, Offset a, Offset b) {
+    final dx = b.dx - a.dx;
+    final dy = b.dy - a.dy;
+    final lengthSquared = dx * dx + dy * dy;
+    final t = lengthSquared == 0 ? 0.0 : (((p.dx - a.dx) * dx + (p.dy - a.dy) * dy) / lengthSquared).clamp(0.0, 1.0);
+    final closestX = a.dx + t * dx;
+    final closestY = a.dy + t * dy;
+    return (p - Offset(closestX, closestY)).distance;
+  }
+
   bool _pointInPolygon(Offset point, List<Offset> polygon) {
     var inside = false;
     for (var i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
@@ -599,13 +651,17 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
     });
 
     if (enteringDrawingMode) {
-      // _pageRectInViewport assumes the page starts top-aligned (offsetY=0)
-      // when it's taller than the viewport, since Syncfusion's single-page
-      // pan offset isn't readable through any public API - jumping to the
-      // current page (after the widget rebuild below switches to
-      // PdfPageLayoutMode.single) resets it to exactly that state, right
-      // before any drawing can happen.
+      // _pageRectInViewport assumes the page starts top-left-aligned
+      // (offset=0) and at zoomLevel=1.0 whenever content would otherwise
+      // overflow the viewport, since Syncfusion's single-page pan offset
+      // isn't readable through any public API - resetting both scroll
+      // (jumpToPage) and zoom right before any drawing can happen is what
+      // makes that assumption actually true for the interactive drawing
+      // case (code-review finding: zoom wasn't reset here originally, so
+      // pinch-zooming before switching to a drawing tool misaligned every
+      // subsequent stroke).
       final pageNumber = _controller.pageNumber;
+      _controller.zoomLevel = 1.0;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (mounted) _controller.jumpToPage(pageNumber);
       });
@@ -767,13 +823,20 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             key: _pdfViewerKey,
             controller: _controller,
             enableTextSelection: !drawingActive,
-            // Drawing mode forces single-page layout: Syncfusion fits the
-            // whole page within the viewport with no scroll overflow, which
-            // is what makes _pageRectInViewport's fit-math valid (continuous
+            // Always single-page (not just during drawing, a code-review
+            // finding caught: ink strokes are only ever painted by the
+            // CustomPaint overlay below, which this used to mount only
+            // while a drawing tool was active - switching back to "Select"
+            // made every pen/highlighter stroke disappear from view, even
+            // though it was still saved). Single-page mode is what makes
+            // _pageRectInViewport's fit-math valid at all (continuous
             // mode's per-page vertical offset within the long scroll isn't
-            // exposed by any public API).
-            pageLayoutMode: drawingActive ? PdfPageLayoutMode.single : PdfPageLayoutMode.continuous,
+            // exposed by any public API) - trading infinite-scroll reading
+            // for page-by-page navigation throughout this screen, not just
+            // while drawing, so that trade only has to be made once.
+            pageLayoutMode: PdfPageLayoutMode.single,
             onDocumentLoaded: (_) => _loadAnnotations(),
+            onZoomLevelChanged: (_) => setState(() {}),
             onTextSelectionChanged: (details) {
               setState(() {
                 _selectedText = details.selectedText;
@@ -784,25 +847,25 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
             onAnnotationSelected: _handleAnnotationSelected,
           );
 
-          if (!drawingActive) return viewer;
-
           return Stack(
             children: [
               viewer,
+              // Ink overlay: always mounted (so saved strokes stay visible
+              // outside drawing mode too) - only the GestureDetector that
+              // captures new strokes is conditional on a drawing tool being
+              // active.
               Positioned.fill(
-                child: LayoutBuilder(
-                  builder: (context, constraints) {
-                    final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
-                    return GestureDetector(
-                      behavior: HitTestBehavior.opaque,
-                      onPanDown: (d) => _handleDrawPointerDown(d.localPosition, viewportSize),
-                      onPanUpdate: (d) => _handleDrawPointerMove(d.localPosition, viewportSize),
-                      onPanEnd: (_) => _handleDrawPointerUp(),
-                      child: CustomPaint(
+                child: IgnorePointer(
+                  ignoring: !drawingActive,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      final viewportSize = Size(constraints.maxWidth, constraints.maxHeight);
+                      final pageRect = _pageRectInViewport(viewportSize, _pageSize(_controller.pageNumber));
+                      final painter = CustomPaint(
                         size: viewportSize,
                         painter: _DrawingOverlayPainter(
                           pageNumber: _controller.pageNumber,
-                          pageRect: _pageRectInViewport(viewportSize, _pageSize(_controller.pageNumber)),
+                          pageRect: pageRect,
                           annotations: _annotations,
                           activeStroke: _activeStroke,
                           activeColor: _tool == _AnnotationTool.pen ? _penColor : _highlighterColor,
@@ -810,10 +873,21 @@ class _PdfReaderScreenState extends State<PdfReaderScreen> {
                           activeOpacity: _tool == _AnnotationTool.highlighter ? 0.4 : 1,
                           lassoPoints: _lassoPoints,
                           lassoSelection: _lassoSelection ?? const [],
+                          pathCache: _inkPathCache,
                         ),
-                      ),
-                    );
-                  },
+                      );
+
+                      if (!drawingActive) return painter;
+
+                      return GestureDetector(
+                        behavior: HitTestBehavior.opaque,
+                        onPanDown: (d) => _handleDrawPointerDown(d.localPosition, viewportSize),
+                        onPanUpdate: (d) => _handleDrawPointerMove(d.localPosition, viewportSize),
+                        onPanEnd: (_) => _handleDrawPointerUp(),
+                        child: painter,
+                      );
+                    },
+                  ),
                 ),
               ),
               if (_lassoSelection != null)
@@ -920,6 +994,12 @@ class _ColorRow extends StatelessWidget {
   }
 }
 
+class _CachedInkPath {
+  _CachedInkPath(this.path, this.pageRect);
+  final Path path;
+  final Rect pageRect;
+}
+
 class _DrawingOverlayPainter extends CustomPainter {
   _DrawingOverlayPainter({
     required this.pageNumber,
@@ -931,6 +1011,7 @@ class _DrawingOverlayPainter extends CustomPainter {
     required this.activeOpacity,
     required this.lassoPoints,
     required this.lassoSelection,
+    required this.pathCache,
   });
 
   final int pageNumber;
@@ -942,6 +1023,28 @@ class _DrawingOverlayPainter extends CustomPainter {
   final double activeOpacity;
   final List<Offset> lassoPoints;
   final List<String> lassoSelection;
+
+  // Owned by the State (persists across repaints, unlike this painter
+  // instance which is constructed fresh every build()) - code review
+  // finding: without this, every pointer-move frame of an in-progress
+  // stroke repainted the whole overlay, recomputing getStroke() for every
+  // *existing* ink annotation on the page too, not just the active one.
+  // Keyed by annotation id; invalidated per-entry if pageRect changed
+  // since it was cached (zoom/orientation) - ink annotations are never
+  // edited in place in this app (only created or deleted), so an id match
+  // with a matching pageRect is sufficient to trust the cached Path.
+  final Map<String, _CachedInkPath> pathCache;
+
+  Path _strokePathFor(model.Annotation annotation, List<PointVector> points, double sizeFraction) {
+    final cached = pathCache[annotation.id];
+    if (cached != null && cached.pageRect == pageRect) {
+      return cached.path;
+    }
+
+    final path = _strokePath(points, sizeFraction);
+    pathCache[annotation.id] = _CachedInkPath(path, pageRect);
+    return path;
+  }
 
   Path _strokePath(List<PointVector> points, double sizeFraction) {
     final scaled = points
@@ -971,14 +1074,16 @@ class _DrawingOverlayPainter extends CustomPainter {
       final isHighlighter = a.payload['tool'] == 'highlighter';
       final selected = lassoSelection.contains(a.id);
 
+      final strokePath = _strokePathFor(a, pts, strokeSize);
+
       final paint = Paint()
         ..color = (_colorFromHex(a.color) ?? Colors.white).withValues(alpha: isHighlighter ? 0.4 : 1)
         ..style = PaintingStyle.fill;
-      canvas.drawPath(_strokePath(pts, strokeSize), paint);
+      canvas.drawPath(strokePath, paint);
 
       if (selected) {
         canvas.drawPath(
-          _strokePath(pts, strokeSize),
+          strokePath,
           Paint()
             ..color = const Color(0xFF38BDF8)
             ..style = PaintingStyle.stroke
