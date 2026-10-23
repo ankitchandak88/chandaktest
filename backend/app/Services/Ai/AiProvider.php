@@ -29,4 +29,23 @@ interface AiProvider
      * @param  array<int, array{role: string, content: string}>  $history
      */
     public function chat(string $contextText, array $history, string $message): string;
+
+    /**
+     * Phase 6 (annotation assistance): synthesizes a reading document's own
+     * highlighted passages - $highlightsText is the already-concatenated
+     * `text` captured on each highlight annotation (see
+     * AiAssistantService::summarizeHighlights), not the whole document.
+     */
+    public function summarizeHighlights(string $highlightsText): string;
+
+    /**
+     * Suggest-only (never auto-applied, same posture as suggestTags):
+     * given the document's extracted text, return a handful of exact
+     * substrings worth highlighting. Each suggestion must be a verbatim
+     * excerpt of $documentText so the caller can locate and offer it,
+     * not a paraphrase.
+     *
+     * @return string[]
+     */
+    public function suggestHighlights(string $documentText): array;
 }

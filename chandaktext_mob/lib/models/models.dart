@@ -209,6 +209,71 @@ class Annotation {
       );
 }
 
+/// Phase 7: one shape for all four of SearchController's result kinds
+/// (`document_page`/`excerpt`/`note`/`annotation`) rather than four Dart
+/// classes - every field other than `type` is nullable because which ones
+/// are populated depends on `type` (mirrors web's SearchResult* union
+/// types in types/api.ts, just flattened since Dart has no discriminated
+/// union syntax as light as TypeScript's).
+class SearchResult {
+  final String type;
+  final String? id;
+  final String? documentId;
+  final String? documentName;
+  final int? pageNumber;
+  final String? annotationType;
+  final String? title;
+  final String? snippet;
+
+  SearchResult({
+    required this.type,
+    this.id,
+    this.documentId,
+    this.documentName,
+    this.pageNumber,
+    this.annotationType,
+    this.title,
+    this.snippet,
+  });
+
+  factory SearchResult.fromJson(Map<String, dynamic> json) => SearchResult(
+        type: json['type'] as String,
+        id: json['id'] as String?,
+        documentId: json['document_id'] as String?,
+        documentName: json['document_name'] as String?,
+        pageNumber: json['page_number'] as int?,
+        annotationType: json['annotation_type'] as String?,
+        title: json['title'] as String?,
+        snippet: json['snippet'] as String?,
+      );
+}
+
+class SearchResults {
+  final List<SearchResult> documentPages;
+  final List<SearchResult> excerpts;
+  final List<SearchResult> notes;
+  final List<SearchResult> annotations;
+
+  SearchResults({
+    required this.documentPages,
+    required this.excerpts,
+    required this.notes,
+    required this.annotations,
+  });
+
+  factory SearchResults.fromJson(Map<String, dynamic> json) {
+    List<SearchResult> list(String key) =>
+        ((json[key] as List?) ?? []).map((e) => SearchResult.fromJson(e as Map<String, dynamic>)).toList();
+
+    return SearchResults(
+      documentPages: list('document_pages'),
+      excerpts: list('excerpts'),
+      notes: list('notes'),
+      annotations: list('annotations'),
+    );
+  }
+}
+
 class ResearchNote {
   final String id;
   final String? title;

@@ -53,6 +53,27 @@ class AnthropicProvider implements AiProvider
         return $this->complete($system, $messages);
     }
 
+    public function summarizeHighlights(string $highlightsText): string
+    {
+        return $this->complete(
+            'You synthesize a reader\'s own highlighted passages from a document into a short, coherent '.
+            "summary (3-5 sentences) of what they found important. Respond with only the summary.",
+            [['role' => 'user', 'content' => $highlightsText]]
+        );
+    }
+
+    public function suggestHighlights(string $documentText): array
+    {
+        $system = 'You suggest up to 5 short passages (verbatim substrings, copied exactly from the given '.
+            'text, not paraphrased) from this document that are worth highlighting as important. '.
+            'Respond with ONLY a JSON array of strings, nothing else.';
+
+        $raw = $this->complete($system, [['role' => 'user', 'content' => $documentText]]);
+        $decoded = json_decode($raw, true);
+
+        return is_array($decoded) ? array_values(array_filter($decoded, 'is_string')) : [];
+    }
+
     private function complete(string $system, array $messages): string
     {
         $response = Http::withHeaders([

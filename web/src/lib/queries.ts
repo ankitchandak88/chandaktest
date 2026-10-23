@@ -8,37 +8,44 @@ import type {
   ExportJob,
   Link,
   Note,
+  OrganizationDetails,
+  OrganizationMember,
   Paginated,
+  Plan,
   Project,
   ProjectShare,
+  SearchResults,
   Tag,
   UsageSummary,
   WorkspaceItem,
 } from '@/types/api'
 
+import { useAuthStore } from '@/stores/auth'
+
 /**
- * BUG-006 fix: the backend has always paginated this endpoint (20 per
- * page); the frontend used to read only `.data.data` with no way to reach
- * a second page, so a user's 21st+ project was simply invisible with no
- * indication more existed. useInfiniteQuery + a "Load more" button (see
- * DashboardPage) is the fix, applied the same way to documents/excerpts/
- * notes below - anywhere the backend paginates.
+ * Multi-tenant query isolation: Scoped strictly by organizationId so that
+ * an advocate chamber's cached projects or briefs NEVER bleed across users.
+ * Also paginated via useInfiniteQuery.
  */
 export function useProjects() {
+  const organizationId = useAuthStore((s) => s.organizationId)
   return useInfiniteQuery({
-    queryKey: ['projects'],
+    queryKey: ['projects', organizationId],
     queryFn: async ({ pageParam }) =>
       (await api.get<Paginated<Project>>('/projects', { params: { page: pageParam } })).data,
     initialPageParam: 1,
     getNextPageParam: (lastPage) =>
       lastPage.current_page < lastPage.last_page ? lastPage.current_page + 1 : undefined,
+    enabled: Boolean(organizationId),
   })
 }
 
 export function useUsage() {
+  const organizationId = useAuthStore((s) => s.organizationId)
   return useQuery({
-    queryKey: ['usage'],
+    queryKey: ['usage', organizationId],
     queryFn: async () => (await api.get<{ data: UsageSummary }>('/usage')).data.data,
+    enabled: Boolean(organizationId),
   })
 }
 
@@ -282,9 +289,9 @@ export function useCreateLink(projectId: string | undefined) {
 
   return useMutation({
     mutationFn: async (input: {
-      source_type: 'excerpt' | 'note'
+      source_type: 'excerpt' | 'note' | 'document'
       source_id: string
-      target_type: 'excerpt' | 'note'
+      target_type: 'excerpt' | 'note' | 'document'
       target_id: string
       label?: string
     }) => (await api.post<{ data: Link }>(`/projects/${projectId}/links`, input)).data.data,
@@ -331,10 +338,63 @@ export function useDeleteAnnotation(documentId: string | undefined) {
   })
 }
 
+// Phase 7: project-wide full-text search (document pages, excerpts, notes,
+// and now annotations). A mutation rather than a query - it only runs when
+// the user submits, not reactively on every keystroke/projectId change.
+export function useSearch() {
+  return useMutation({
+    mutationFn: async ({ projectId, q }: { projectId: string; q: string }) =>
+      (
+        await api.get<{ data: SearchResults }>('/search', {
+          params: { project_id: projectId, q },
+        })
+      ).data.data,
+  })
+}
+
 export function useStartExport(projectId: string | undefined) {
   return useMutation({
     mutationFn: async (format: 'pdf' | 'pdf_highlights' | 'docx' = 'pdf') =>
       (await api.post<{ data: ExportJob }>(`/projects/${projectId}/exports`, { format })).data.data,
+  })
+}
+
+export function useExportAndPurge(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () =>
+      (
+        await api.post<{
+          message: string
+          certificate: {
+            certificate_id: string
+            project_id: string
+            project_name: string
+            purged_by: string
+            timestamp: string
+            documents_destroyed: Array<{
+              id: string
+              filename: string
+              size_bytes: number
+              checksum_sha256: string
+            }>
+            notes_count: number
+            excerpts_count: number
+            status: string
+            legal_declaration: string
+          }
+          archive: {
+            project_name: string
+            excerpts: Excerpt[]
+            notes: Note[]
+          }
+        }>(`/projects/${projectId}/export-and-purge`)
+      ).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'documents'] })
+      queryClient.invalidateQueries({ queryKey: ['usage'] })
+      queryClient.invalidateQueries({ queryKey: ['organizations', 'current'] })
+    },
   })
 }
 
@@ -405,6 +465,25 @@ export function useChatWithDocument() {
   })
 }
 
+export function useSummarizeHighlights() {
+  return useMutation({
+    mutationFn: async (documentId: string) =>
+      (await api.post<{ data: { summary: string } }>(`/documents/${documentId}/summarize-highlights`))
+        .data.data.summary,
+  })
+}
+
+export function useSuggestHighlights() {
+  return useMutation({
+    mutationFn: async (documentId: string) =>
+      (
+        await api.post<{ data: { suggestions: string[] } }>(
+          `/documents/${documentId}/suggest-highlights`,
+        )
+      ).data.data.suggestions,
+  })
+}
+
 export function useSuggestExcerptTags() {
   return useMutation({
     mutationFn: async (excerptId: string) =>
@@ -420,3 +499,103 @@ export function useSuggestNoteTags() {
         .suggestions,
   })
 }
+
+export function useOrganizationAnalytics() {
+  return useQuery({
+    queryKey: ['organizations', 'current', 'analytics'],
+    queryFn: async () =>
+      (
+        await api.get<{
+          data: {
+            total_projects: number
+            total_documents: number
+            total_storage_bytes: number
+            total_excerpts: number
+            total_notes: number
+            total_members: number
+            recent_activity: Array<{
+              id: number
+              action: string
+              target_type: string
+              metadata: Record<string, unknown>
+              created_at: string
+            }>
+          }
+        }>('/organizations/current/analytics')
+      ).data.data,
+  })
+}
+
+export function useCurrentOrganization() {
+  return useQuery({
+    queryKey: ['organizations', 'current'],
+    queryFn: async () =>
+      (await api.get<{ data: OrganizationDetails; usage?: UsageSummary }>('/organizations/current')).data,
+  })
+}
+
+export function useOrganizationMembers() {
+  return useQuery({
+    queryKey: ['organizations', 'current', 'members'],
+    queryFn: async () =>
+      (
+        await api.get<{
+          data: OrganizationMember[]
+          seats: { used: number; limit: number }
+        }>('/organizations/current/members')
+      ).data,
+  })
+}
+
+export function useAddOrganizationMember() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: { email: string; name?: string; role: string }) =>
+      (await api.post<{ data: OrganizationMember }>('/organizations/current/members', payload)).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', 'current', 'members'] })
+      queryClient.invalidateQueries({ queryKey: ['organizations', 'current'] })
+      queryClient.invalidateQueries({ queryKey: ['usage'] })
+    },
+  })
+}
+
+export function useRemoveOrganizationMember() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (membershipId: string) =>
+      (await api.delete<{ data: { message: string } }>(`/organizations/members/${membershipId}`)).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', 'current', 'members'] })
+      queryClient.invalidateQueries({ queryKey: ['organizations', 'current'] })
+      queryClient.invalidateQueries({ queryKey: ['usage'] })
+    },
+  })
+}
+
+export function useBillingPlans() {
+  return useQuery({
+    queryKey: ['billing', 'plans'],
+    queryFn: async () => (await api.get<{ data: Plan[] }>('/billing/plans')).data.data,
+  })
+}
+
+export function useUpgradeSubscription() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (planCode: string) =>
+      (
+        await api.post<{
+          data: {
+            checkout_url: string
+            subscription_id: string
+          }
+        }>('/billing/checkout', { plan_code: planCode })
+      ).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['organizations', 'current'] })
+      queryClient.invalidateQueries({ queryKey: ['usage'] })
+    },
+  })
+}
+

@@ -56,12 +56,24 @@ class PlanResource extends Resource
                     ->label('ID')
                     ->searchable(),
                 Tables\Columns\TextColumn::make('code')
+                    ->badge()
                     ->searchable(),
                 Tables\Columns\TextColumn::make('name')
-                    ->searchable(),
+                    ->searchable()
+                    ->weight('bold'),
                 Tables\Columns\TextColumn::make('price_inr_paise')
-                    ->numeric()
+                    ->label('Price')
+                    ->formatStateUsing(fn ($state) => $state == 0 ? 'Free' : '₹'.number_format($state / 100, 0).'/mo')
                     ->sortable(),
+                Tables\Columns\TextColumn::make('limits.seats')
+                    ->label('Seats')
+                    ->default(1)
+                    ->suffix(' Advocates'),
+                Tables\Columns\TextColumn::make('limits.storage_mb')
+                    ->label('Storage')
+                    ->formatStateUsing(fn ($state) => ($state >= 1000 ? ($state / 1000).' GB' : $state.' MB')),
+                Tables\Columns\TextColumn::make('limits.projects')
+                    ->label('Cases Limit'),
                 Tables\Columns\IconColumn::make('active')
                     ->boolean(),
                 Tables\Columns\TextColumn::make('created_at')

@@ -244,4 +244,19 @@ class ProjectApi {
     final response = await _dio.post('/notes/$noteId/suggest-tags');
     return (response.data['data']['suggestions'] as List).cast<String>();
   }
+
+  static Future<SearchResults> search(String projectId, String q) async {
+    final response = await _dio.get('/search', queryParameters: {'project_id': projectId, 'q': q});
+    return SearchResults.fromJson(response.data['data'] as Map<String, dynamic>);
+  }
+
+  static Future<String> summarizeHighlights(String documentId) async {
+    final response = await _dio.post('/documents/$documentId/summarize-highlights');
+    return response.data['data']['summary'] as String;
+  }
+
+  static Future<List<String>> suggestHighlights(String documentId) async {
+    final response = await _dio.post('/documents/$documentId/suggest-highlights');
+    return (response.data['data']['suggestions'] as List).cast<String>();
+  }
 }

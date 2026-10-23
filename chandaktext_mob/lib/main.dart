@@ -32,18 +32,64 @@ class _ChandakTextAppState extends State<ChandakTextApp> {
       child: MaterialApp(
         title: 'ChandakText',
         debugShowCheckedModeBanner: false,
-        // Same dark-slate-shell + cyan-accent direction as the web app
-        // (docs/05 section 5.1).
+        // 2026 Flagship Executive White & Warm Parchment theme
+        // matching the desktop advocate brief workspace
         theme: ThemeData(
-          brightness: Brightness.dark,
-          scaffoldBackgroundColor: const Color(0xFF020617),
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF22D3EE),
-            brightness: Brightness.dark,
-          ),
-          appBarTheme: const AppBarTheme(backgroundColor: Color(0xFF0F172A)),
-          cardTheme: const CardThemeData(color: Color(0xFF0F172A)),
           useMaterial3: true,
+          brightness: Brightness.light,
+          scaffoldBackgroundColor: const Color(0xFFF8FAFC),
+          colorScheme: const ColorScheme.light(
+            primary: Color(0xFF1E3A8A),
+            secondary: Color(0xFFD97706),
+            surface: Colors.white,
+            onSurface: Color(0xFF0F172A),
+          ),
+          appBarTheme: const AppBarTheme(
+            backgroundColor: Colors.white,
+            foregroundColor: Color(0xFF0F172A),
+            elevation: 0.5,
+            centerTitle: false,
+            titleTextStyle: TextStyle(
+              color: Color(0xFF0F172A),
+              fontSize: 18,
+              fontWeight: FontWeight.w700,
+            ),
+            iconTheme: IconThemeData(color: Color(0xFF334155)),
+          ),
+          cardTheme: CardThemeData(
+            color: Colors.white,
+            elevation: 0.5,
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(14),
+              side: const BorderSide(color: Color(0xFFE2E8F0)),
+            ),
+          ),
+          inputDecorationTheme: InputDecorationTheme(
+            filled: true,
+            fillColor: Colors.white,
+            contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 14),
+            border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFCBD5E1)),
+            ),
+            enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFFE2E8F0)),
+            ),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(10),
+              borderSide: const BorderSide(color: Color(0xFF1E3A8A), width: 1.5),
+            ),
+          ),
+          filledButtonTheme: FilledButtonThemeData(
+            style: FilledButton.styleFrom(
+              backgroundColor: const Color(0xFF1E3A8A),
+              foregroundColor: Colors.white,
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+              textStyle: const TextStyle(fontWeight: FontWeight.w600, fontSize: 15),
+            ),
+          ),
         ),
         home: Consumer<AuthProvider>(
           builder: (context, auth, _) {

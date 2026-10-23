@@ -6,9 +6,10 @@ use App\Models\Plan;
 use Illuminate\Database\Seeder;
 
 /**
- * Plan limits are configurable, not hard-coded (docs/06 section 6.4), so
- * they live in the database and are only seeded here with starting values
- * pulled from .env. Admins can edit them afterwards from Filament.
+ * Advocate & Law Firm Subscription Plans:
+ * 1. Solo Advocate (Free) - 1 Advocate seat, individual practice
+ * 2. Advocate Chambers (₹1,999) - 10 Advocate/Junior seats, team matters
+ * 3. Law Firm Enterprise (₹4,999) - 25+ Advocate seats, unlimited matters
  */
 class PlanSeeder extends Seeder
 {
@@ -17,14 +18,65 @@ class PlanSeeder extends Seeder
         Plan::updateOrCreate(
             ['code' => 'free'],
             [
-                'name' => 'Free',
+                'name' => 'Solo Advocate (Starter)',
                 'limits' => [
-                    'projects' => (int) env('PLAN_FREE_PROJECTS', 3),
-                    'storage_mb' => (int) env('PLAN_FREE_STORAGE_MB', 500),
-                    'documents_per_project' => (int) env('PLAN_FREE_DOCS_PER_PROJECT', 10),
+                    'seats' => 1,
+                    'projects' => 5,
+                    'storage_mb' => 1000,
+                    'documents_per_project' => 20,
                 ],
-                'features' => ['search' => 'basic', 'export' => 'limited'],
+                'features' => [
+                    'practice' => 'Solo Practice (1 Seat)',
+                    'court_paper_mode' => 'yes',
+                    'chronology' => 'basic',
+                    'citations' => '1-tap standard',
+                ],
                 'price_inr_paise' => 0,
+                'active' => true,
+            ]
+        );
+
+        Plan::updateOrCreate(
+            ['code' => 'chambers'],
+            [
+                'name' => 'Advocate Chambers (10 Seats)',
+                'limits' => [
+                    'seats' => 10,
+                    'projects' => 100,
+                    'storage_mb' => 25000,
+                    'documents_per_project' => 200,
+                ],
+                'features' => [
+                    'practice' => 'Chambers Team (10 Seats)',
+                    'brief_assignment' => 'yes',
+                    'court_hearing_mode' => 'full_dais',
+                    'paper_book_indexing' => 'yes',
+                    'court_synopsis_export' => 'yes',
+                ],
+                'price_inr_paise' => 199900, // ₹1,999/month
+                'active' => true,
+            ]
+        );
+
+        Plan::updateOrCreate(
+            ['code' => 'firm'],
+            [
+                'name' => 'Law Firm Enterprise (25 Seats)',
+                'limits' => [
+                    'seats' => 25,
+                    'projects' => 1000,
+                    'storage_mb' => 100000,
+                    'documents_per_project' => 1000,
+                ],
+                'features' => [
+                    'practice' => 'Full Law Firm (25+ Seats)',
+                    'hierarchy_roles' => 'senior_partner_associate_junior',
+                    'ai_synopsis_extractor' => 'yes',
+                    'parallel_bench_compare' => 'yes',
+                    'audit_log_compliance' => 'yes',
+                    'priority_support' => 'yes',
+                ],
+                'price_inr_paise' => 499900, // ₹4,999/month
                 'active' => true,
             ]
         );
@@ -32,13 +84,18 @@ class PlanSeeder extends Seeder
         Plan::updateOrCreate(
             ['code' => 'pro'],
             [
-                'name' => 'Pro',
+                'name' => 'Senior Counsel Pro (5 Seats)',
                 'limits' => [
-                    'projects' => (int) env('PLAN_PRO_PROJECTS', 100),
-                    'storage_mb' => (int) env('PLAN_PRO_STORAGE_MB', 20000),
-                    'documents_per_project' => (int) env('PLAN_PRO_DOCS_PER_PROJECT', 500),
+                    'seats' => 5,
+                    'projects' => 50,
+                    'storage_mb' => 20000,
+                    'documents_per_project' => 500,
                 ],
-                'features' => ['search' => 'advanced', 'export' => 'higher_allowance'],
+                'features' => [
+                    'practice' => 'Boutique Counsel (5 Seats)',
+                    'court_hearing_mode' => 'yes',
+                    'search' => 'advanced',
+                ],
                 'price_inr_paise' => 99900,
                 'active' => true,
             ]

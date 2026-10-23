@@ -60,6 +60,7 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
         ->middleware('throttle:member-management');
     Route::delete('/organizations/members/{membership}', [OrganizationController::class, 'removeMember'])
         ->middleware('throttle:member-management');
+    Route::get('/organizations/current/analytics', [OrganizationController::class, 'analytics']);
 
     Route::get('/projects', [ProjectController::class, 'index']);
     Route::post('/projects', [ProjectController::class, 'store']);
@@ -75,6 +76,10 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::post('/documents/{document}/summarize', [AiController::class, 'summarizeDocument'])
         ->middleware('throttle:ai');
     Route::post('/documents/{document}/chat', [AiController::class, 'chatAboutDocument'])
+        ->middleware('throttle:ai');
+    Route::post('/documents/{document}/summarize-highlights', [AiController::class, 'summarizeHighlights'])
+        ->middleware('throttle:ai');
+    Route::post('/documents/{document}/suggest-highlights', [AiController::class, 'suggestHighlights'])
         ->middleware('throttle:ai');
     Route::get('/documents/{document}/download', [DocumentController::class, 'download']);
     Route::delete('/documents/{document}', [DocumentController::class, 'destroy']);
@@ -121,6 +126,7 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::get('/search', [SearchController::class, 'index'])->middleware('throttle:search');
 
     Route::post('/projects/{project}/exports', [ExportController::class, 'store'])->middleware('throttle:export');
+    Route::post('/projects/{project}/export-and-purge', [ExportController::class, 'exportAndPurge']);
     Route::get('/exports/{export}', [ExportController::class, 'show']);
     Route::get('/exports/{export}/download', [ExportController::class, 'download']);
 

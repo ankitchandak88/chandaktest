@@ -52,13 +52,14 @@ export default function AiDocumentPanel({ projectId, document }: { projectId: st
     return (
       <button
         type="button"
-        className="mt-1 text-xs text-accent hover:underline"
+        className="flex items-center gap-1 rounded-xl border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 px-2.5 py-1 text-xs font-semibold text-indigo-700 transition-colors cursor-pointer"
         onClick={(e) => {
           e.stopPropagation()
           setOpen(true)
         }}
       >
-        Ask AI
+        <span>✨</span>
+        <span>Ask AI</span>
       </button>
     )
   }

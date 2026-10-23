@@ -21,6 +21,8 @@ class DocumentResource extends Resource
 {
     protected static ?string $model = Document::class;
 
+    protected static bool $shouldRegisterNavigation = false;
+
     protected static ?string $navigationIcon = 'heroicon-o-document';
 
     protected static ?string $navigationGroup = 'Content';

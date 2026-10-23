@@ -74,3 +74,35 @@ test('a failed response throws rather than silently returning an empty string', 
 
     expect(fn () => $provider->summarize('x'))->toThrow(RuntimeException::class);
 });
+
+test('summarizeHighlights sends the highlights text as the user message', function () {
+    Http::fake(['api.openai.com/*' => Http::response([
+        'choices' => [['message' => ['content' => 'Highlights summary.']]],
+    ])]);
+
+    $provider = new OpenAiProvider('test-key', 'gpt-4o-mini');
+
+    expect($provider->summarizeHighlights('highlight one. highlight two.'))->toBe('Highlights summary.');
+
+    Http::assertSent(fn ($request) => $request['messages'][1] === ['role' => 'user', 'content' => 'highlight one. highlight two.']);
+});
+
+test('suggestHighlights parses a JSON array response', function () {
+    Http::fake(['api.openai.com/*' => Http::response([
+        'choices' => [['message' => ['content' => '["Passage one.", "Passage two."]']]],
+    ])]);
+
+    $provider = new OpenAiProvider('test-key', 'gpt-4o-mini');
+
+    expect($provider->suggestHighlights('document text'))->toBe(['Passage one.', 'Passage two.']);
+});
+
+test('suggestHighlights returns an empty array if the model replies with non-JSON', function () {
+    Http::fake(['api.openai.com/*' => Http::response([
+        'choices' => [['message' => ['content' => 'not json at all']]],
+    ])]);
+
+    $provider = new OpenAiProvider('test-key', 'gpt-4o-mini');
+
+    expect($provider->suggestHighlights('document text'))->toBe([]);
+});

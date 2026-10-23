@@ -49,6 +49,38 @@ class AiAssistantService
         return $this->provider->chat($this->documentText($document), $history, $message);
     }
 
+    /**
+     * Phase 6: compiles this document's own highlight-type annotations
+     * (the `text` captured on each one at creation time, same field
+     * HiLiteView already reads on both platforms) and asks the provider
+     * for a synthesis - "what did I think was important", not "what is
+     * this document about" (that's summarizeDocument).
+     */
+    public function summarizeHighlights(Document $document): string
+    {
+        $highlightsText = $document->annotations()
+            ->where('type', 'highlight')
+            ->orderBy('page_number')
+            ->get()
+            ->map(fn ($a) => (string) ($a->payload['text'] ?? ''))
+            ->filter()
+            ->implode("\n\n");
+
+        return $this->provider->summarizeHighlights(mb_substr($highlightsText, 0, self::MAX_CONTEXT_CHARS));
+    }
+
+    /**
+     * Suggest-only, never auto-applied (same posture as suggestTags) -
+     * the caller is responsible for letting the user review and create
+     * each suggested highlight themselves.
+     *
+     * @return string[]
+     */
+    public function suggestHighlights(Document $document): array
+    {
+        return $this->provider->suggestHighlights($this->documentText($document));
+    }
+
     private function documentText(Document $document): string
     {
         $text = $document->pages()->orderBy('page_number')->pluck('text')->implode("\n\n");

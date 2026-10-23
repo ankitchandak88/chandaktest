@@ -6,19 +6,24 @@ use App\Http\Controllers\Controller;
 use App\Models\Membership;
 use App\Models\User;
 use App\Services\AuditLogger;
+use App\Services\EntitlementService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Str;
 use Illuminate\Validation\ValidationException;
 
 class OrganizationController extends Controller
 {
-    public function __construct(private readonly AuditLogger $auditLogger)
-    {
+    public function __construct(
+        private readonly AuditLogger $auditLogger,
+        private readonly EntitlementService $entitlements,
+    ) {
     }
 
     /** List the organizations the current user belongs to, for a workspace switcher. */
     public function index(Request $request)
     {
-        $memberships = $request->user()->memberships()->with('organization')->get();
+        $memberships = $request->user()->memberships()->with('organization.subscription.plan')->get();
 
         return response()->json(['data' => $memberships]);
     }
@@ -28,7 +33,10 @@ class OrganizationController extends Controller
         $organization = $request->organization();
         $this->authorize('view', $organization);
 
-        return response()->json(['data' => $organization->load('subscription.plan')]);
+        return response()->json([
+            'data' => $organization->load('subscription.plan'),
+            'usage' => $this->entitlements->usageSummary($organization),
+        ]);
     }
 
     public function members(Request $request)
@@ -38,7 +46,13 @@ class OrganizationController extends Controller
 
         $members = $organization->memberships()->with('user:id,name,email')->get();
 
-        return response()->json(['data' => $members]);
+        return response()->json([
+            'data' => $members,
+            'seats' => [
+                'used' => $members->count(),
+                'limit' => $this->entitlements->planFor($organization)->limit('seats', 1),
+            ],
+        ]);
     }
 
     public function addMember(Request $request)
@@ -48,29 +62,32 @@ class OrganizationController extends Controller
 
         $data = $request->validate([
             'email' => ['required', 'email'],
-            'role' => ['required', 'in:owner,member'],
+            'name' => ['nullable', 'string', 'max:255'],
+            'role' => ['required', 'string', 'in:owner,partner,associate,junior,clerk,member'],
         ]);
 
         $user = User::where('email', $data['email'])->first();
 
+        $existing = $user ? Membership::where('organization_id', $organization->id)
+            ->where('user_id', $user->id)
+            ->first() : null;
+
+        // If this is a new member addition (not a role update of existing member), enforce seat quota
+        if (! $existing) {
+            $this->entitlements->withinMemberQuota($organization, function () {});
+        }
+
         if (! $user) {
-            throw ValidationException::withMessages([
-                'email' => ['No account with that email exists yet. They need to register first.'],
+            // Auto-create invited user account so advocate colleagues / juniors can join instantly
+            $user = User::create([
+                'name' => $data['name'] ?: explode('@', $data['email'])[0],
+                'email' => $data['email'],
+                'password' => Hash::make(Str::random(16)),
+                'email_verified_at' => now(),
             ]);
         }
 
-        $existing = Membership::where('organization_id', $organization->id)
-            ->where('user_id', $user->id)
-            ->first();
-
-        // BUG-005 fix: this used to be firstOrCreate(), which silently kept
-        // the OLD role if the membership already existed - an owner trying
-        // to promote/demote an existing member through this same endpoint
-        // (the obvious thing to try) saw a 201 "success" that changed
-        // nothing. updateOrCreate() actually applies the requested role,
-        // guarded by the same last-owner protection removeMember() already
-        // has (demoting the sole owner would leave the organization
-        // ownerless, same failure mode as removing them outright).
+        // Last-owner protection
         if ($existing && $existing->isOwner() && $data['role'] !== 'owner'
             && $organization->memberships()->where('role', 'owner')->count() <= 1) {
             return response()->json([
@@ -115,5 +132,39 @@ class OrganizationController extends Controller
         ]);
 
         return response()->json(['data' => ['message' => 'Member removed.']]);
+    }
+
+    public function analytics(Request $request)
+    {
+        $organization = $request->organization();
+        $this->authorize('view', $organization);
+
+        $projectIds = $organization->projects()->pluck('id');
+
+        $totalProjects = $projectIds->count();
+        $totalDocuments = \App\Models\Document::whereIn('project_id', $projectIds)->count();
+        $totalStorageBytes = (int) \App\Models\Document::whereIn('project_id', $projectIds)->sum('size_bytes');
+        $totalExcerpts = \App\Models\Excerpt::whereIn('project_id', $projectIds)->count();
+        $totalNotes = \App\Models\Note::whereIn('project_id', $projectIds)->count();
+        $totalMembers = $organization->memberships()->count();
+
+        $recentLogs = \App\Models\AuditLog::where('target_type', 'organization')
+            ->where('target_id', (string) $organization->id)
+            ->orWhereIn('target_id', $projectIds->map(fn ($id) => (string) $id))
+            ->latest('id')
+            ->limit(15)
+            ->get();
+
+        return response()->json([
+            'data' => [
+                'total_projects' => $totalProjects,
+                'total_documents' => $totalDocuments,
+                'total_storage_bytes' => $totalStorageBytes,
+                'total_excerpts' => $totalExcerpts,
+                'total_notes' => $totalNotes,
+                'total_members' => $totalMembers,
+                'recent_activity' => $recentLogs,
+            ],
+        ]);
     }
 }

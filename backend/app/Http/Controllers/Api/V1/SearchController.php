@@ -3,6 +3,7 @@
 namespace App\Http\Controllers\Api\V1;
 
 use App\Http\Controllers\Controller;
+use App\Models\Annotation;
 use App\Models\DocumentPage;
 use App\Models\Excerpt;
 use App\Models\Note;
@@ -80,11 +81,30 @@ class SearchController extends Controller
                 'snippet' => str((string) $note->content)->limit(200)->toString(),
             ]);
 
+        // Phase 7: highlight/underline `payload->text` and comment
+        // `comment_text` both land in the generated `searchable_text`
+        // column (see the migration) - ink has neither and is never
+        // matched, which is correct, there's nothing textual to search.
+        $annotations = Annotation::query()
+            ->where('project_id', $project->id)
+            ->whereRaw('MATCH(searchable_text) AGAINST (? IN NATURAL LANGUAGE MODE)', [$query])
+            ->limit(20)
+            ->get(['id', 'document_id', 'page_number', 'type', 'searchable_text'])
+            ->map(fn ($annotation) => [
+                'type' => 'annotation',
+                'id' => $annotation->id,
+                'annotation_type' => $annotation->type,
+                'document_id' => $annotation->document_id,
+                'page_number' => $annotation->page_number,
+                'snippet' => str((string) $annotation->searchable_text)->limit(200)->toString(),
+            ]);
+
         return response()->json([
             'data' => [
                 'document_pages' => $pages,
                 'excerpts' => $excerpts,
                 'notes' => $notes,
+                'annotations' => $annotations,
             ],
         ]);
     }

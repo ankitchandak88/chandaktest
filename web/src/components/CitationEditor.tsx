@@ -36,13 +36,14 @@ export default function CitationEditor({ projectId, document }: { projectId: str
     return (
       <button
         type="button"
-        className="mt-1 text-xs text-accent hover:underline"
+        className="flex items-center gap-1 rounded-xl border border-slate-200/90 bg-slate-50 hover:bg-slate-100 px-2.5 py-1 text-xs font-semibold text-slate-600 transition-colors cursor-pointer"
         onClick={(e) => {
           e.stopPropagation()
           setEditing(true)
         }}
       >
-        + Add citation
+        <span>📜</span>
+        <span>+ Citation</span>
       </button>
     )
   }

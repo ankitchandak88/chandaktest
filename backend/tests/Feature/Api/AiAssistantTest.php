@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Annotation;
 use App\Models\Excerpt;
 use App\Models\Note;
 use App\Models\Project;
@@ -88,4 +89,74 @@ test('suggest-tags on a note works the same way', function () {
     apiPost("/api/v1/notes/{$note->id}/suggest-tags", [], $headers)
         ->assertOk()
         ->assertJsonStructure(['data' => ['suggestions']]);
+});
+
+// Annotation/drawing engine, Phase 6: AI-powered annotation assistance.
+test('summarize-highlights synthesizes only this document\'s highlight annotations, not underlines/ink/comments', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+    $document = createReadyDocument($project, $user->id);
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'highlight',
+        'color' => '#facc15',
+        'payload' => ['rects' => [], 'text' => 'Important finding about photosynthesis rates.'],
+    ]);
+
+    Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'underline',
+        'color' => '#38bdf8',
+        'payload' => ['rects' => [], 'text' => 'This underline text should not appear in the summary input.'],
+    ]);
+
+    $response = apiPost("/api/v1/documents/{$document->id}/summarize-highlights", [], $headers);
+    $response->assertOk();
+    expect($response->json('data.summary'))->toContain('photosynthesis');
+});
+
+test('summarize-highlights on a document with no highlights yet says so rather than erroring', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+    $document = createReadyDocument($project, $user->id);
+
+    $response = apiPost("/api/v1/documents/{$document->id}/summarize-highlights", [], $headers);
+    $response->assertOk();
+    expect($response->json('data.summary'))->toBe('(No highlights yet to summarize.)');
+});
+
+test('suggest-highlights returns verbatim excerpt suggestions without creating any annotation', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+    $document = createReadyDocument($project, $user->id);
+    $document->pages()->create([
+        'page_number' => 1,
+        'text' => 'Methodology methodology methodology was rigorous. The weather was mild that day.',
+    ]);
+
+    $response = apiPost("/api/v1/documents/{$document->id}/suggest-highlights", [], $headers);
+    $response->assertOk();
+    expect($response->json('data.suggestions'))->toBeArray();
+    expect($document->fresh()->annotations()->count())->toBe(0);
+});
+
+test('a user from another organization cannot use the highlight-assistance endpoints', function () {
+    ['headers' => $ownerHeaders, 'user' => $user] = registerUser('ai-hl-owner@example.test');
+    ['headers' => $outsiderHeaders] = registerUser('ai-hl-outsider@example.test');
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $ownerHeaders)->json('data.id');
+    $project = Project::find($projectId);
+    $document = createReadyDocument($project, $user->id);
+
+    apiPost("/api/v1/documents/{$document->id}/summarize-highlights", [], $outsiderHeaders)->assertStatus(403);
+    apiPost("/api/v1/documents/{$document->id}/suggest-highlights", [], $outsiderHeaders)->assertStatus(403);
 });

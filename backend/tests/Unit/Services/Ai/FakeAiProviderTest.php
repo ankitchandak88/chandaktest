@@ -41,3 +41,29 @@ test('chat acknowledges the message and context size', function () {
     expect($reply)->toContain('What is this about?');
     expect($reply)->toContain('[Fake AI');
 });
+
+test('summarizeHighlights returns a truncated, clearly-labeled stand-in', function () {
+    $summary = $this->provider->summarizeHighlights('Important finding about distributed consensus.');
+
+    expect($summary)->toContain('[Fake AI summary');
+    expect($summary)->toContain('Important finding about distributed consensus');
+});
+
+test('summarizeHighlights handles no-highlights-yet text without throwing', function () {
+    expect($this->provider->summarizeHighlights(''))->toBe('(No highlights yet to summarize.)');
+});
+
+test('suggestHighlights returns verbatim sentences from the source text, not paraphrases', function () {
+    $text = 'Methodology methodology methodology was rigorous throughout. The weather was mild that day.';
+
+    $suggestions = $this->provider->suggestHighlights($text);
+
+    expect($suggestions)->not->toBeEmpty();
+    foreach ($suggestions as $suggestion) {
+        expect($text)->toContain($suggestion);
+    }
+});
+
+test('suggestHighlights returns nothing for empty text', function () {
+    expect($this->provider->suggestHighlights(''))->toBe([]);
+});

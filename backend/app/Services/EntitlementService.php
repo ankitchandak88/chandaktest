@@ -84,6 +84,24 @@ class EntitlementService
         });
     }
 
+    public function withinMemberQuota(Organization $organization, callable $callback): mixed
+    {
+        return DB::transaction(function () use ($organization, $callback) {
+            DB::table('organizations')->where('id', $organization->id)->lockForUpdate()->first();
+
+            $limit = $this->planFor($organization)->limit('seats', 1);
+            $current = $organization->memberships()->count();
+
+            if ($current >= $limit) {
+                throw new \App\Exceptions\QuotaExceededException(
+                    "Seat limit reached for your plan ({$limit} seats). Upgrade to Chambers (10 Seats) or Law Firm Enterprise (25 Seats) to add more members."
+                );
+            }
+
+            return $callback();
+        });
+    }
+
     public function storageUsedBytes(Organization $organization): int
     {
         return (int) \App\Models\Document::where('organization_id', $organization->id)
@@ -97,15 +115,20 @@ class EntitlementService
 
         return [
             'plan' => $plan->code,
+            'plan_name' => $plan->name,
+            'members' => [
+                'used' => $organization->memberships()->count(),
+                'limit' => $plan->limit('seats', 1),
+            ],
             'projects' => [
                 'used' => $organization->projects()->count(),
-                'limit' => $plan->limit('projects', 3),
+                'limit' => $plan->limit('projects', 5),
             ],
             'storage_bytes' => [
                 'used' => $this->storageUsedBytes($organization),
-                'limit' => $plan->limit('storage_mb', 500) * 1024 * 1024,
+                'limit' => $plan->limit('storage_mb', 1000) * 1024 * 1024,
             ],
-            'documents_per_project_limit' => $plan->limit('documents_per_project', 10),
+            'documents_per_project_limit' => $plan->limit('documents_per_project', 20),
         ];
     }
 }

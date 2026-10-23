@@ -24,9 +24,9 @@ class LinkController extends Controller
         $this->authorize('create', [Link::class, $project]);
 
         $data = $request->validate([
-            'source_type' => ['required', 'in:excerpt,note'],
+            'source_type' => ['required', 'in:excerpt,note,document'],
             'source_id' => ['required', 'uuid'],
-            'target_type' => ['required', 'in:excerpt,note'],
+            'target_type' => ['required', 'in:excerpt,note,document'],
             'target_id' => ['required', 'uuid'],
             'label' => ['nullable', 'string', 'max:255'],
         ]);
@@ -60,6 +60,7 @@ class LinkController extends Controller
         $model = match ($type) {
             'excerpt' => Excerpt::where('project_id', $project->id)->whereKey($id)->first(),
             'note' => Note::where('project_id', $project->id)->whereKey($id)->first(),
+            'document' => Document::where('project_id', $project->id)->whereKey($id)->first(),
             default => null,
         };
 

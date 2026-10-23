@@ -37,3 +37,9 @@ Thumbs.db
 .idea/
 .vscode/
 dist/
+scratch/
+*.log
+*.tmp
+*.env
+*.env.*
+!*.env.example

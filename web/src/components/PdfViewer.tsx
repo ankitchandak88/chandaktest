@@ -3,7 +3,13 @@ import { getStroke } from 'perfect-freehand'
 import { pdfjsLib } from '@/lib/pdf'
 import { api } from '@/lib/api'
 import { getSvgPathFromStroke } from '@/lib/freehand'
-import { useAnnotations, useCreateAnnotation, useDeleteAnnotation } from '@/lib/queries'
+import {
+  useAnnotations,
+  useCreateAnnotation,
+  useDeleteAnnotation,
+  useSuggestHighlights,
+  useSummarizeHighlights,
+} from '@/lib/queries'
 import type { Annotation, SourceRect } from '@/types/api'
 import { Button } from '@/components/ui'
 
@@ -16,10 +22,29 @@ interface SelectionInfo {
 
 interface PdfViewerProps {
   documentId: string
-  onSaveExcerpt: (selection: { pageNumber: number; text: string; rects: SourceRect[] }) => void
+  onSaveExcerpt: (selection: { pageNumber: number; text: string; rects: SourceRect[]; tag?: string }) => void
+  // Phase 7: lets a search result deep-link straight to the page it was
+  // found on, reusing the same scroll-into-view jumpToPage already used by
+  // Outline/HiLiteView - not a new navigation mechanism, just a new caller.
+  initialPage?: number
+  // Mode-tabs restructuring: "Workspace" is a sibling top-level tab
+  // (ProjectWorkspacePage's own WorkspaceCanvas), not something PdfViewer
+  // can render itself - clicking it in the in-reader mode switch delegates
+  // back up to the parent rather than PdfViewer owning that navigation.
+  onSwitchToWorkspace?: () => void
 }
 
 type AnnotationTool = 'select' | 'comment' | 'pen' | 'highlighter' | 'eraser' | 'lasso'
+
+// Drawing/Document/Workspace mode-tabs (matches the LiquidText reference
+// screenshots the user compared against): "Workspace" switches to the
+// sibling project-wide canvas tab (see onSwitchToWorkspace above);
+// "Drawing" and "Document" both stay right here, just reprioritizing which
+// tools are up front and which tool is active by default - nothing is
+// ever hidden or removed, every tool stays reachable in both modes, since
+// reducing functionality to make a toolbar look tidier would be a
+// regression against "100x better than LiquidText, no compromise".
+type ReaderMode = 'drawing' | 'document'
 
 interface StrokePoint {
   x: number
@@ -33,13 +58,36 @@ interface InkPayload {
   tool: 'pen' | 'highlighter'
 }
 
+interface CreateAnnotationInput {
+  page_number: number
+  type: Annotation['type']
+  color?: string
+  comment_text?: string
+  payload: Record<string, unknown>
+}
+
+// Undo/redo for drawing actions: a single chronological stack per the
+// usual editor convention (undoing an older entry out of order would risk
+// operating on an id another, newer entry already changed - LIFO order
+// guarantees whichever entry is being toggled is always the most recent
+// thing that touched that annotation). `present` tracks whether the
+// annotation currently exists server-side; `id` is only meaningful while
+// `present` is true. Both undo and redo perform the exact same toggle
+// (delete if present, recreate from `data` if not) - they only differ in
+// which stack they pop from and push back onto.
+interface UndoEntry {
+  id: string
+  present: boolean
+  data: CreateAnnotationInput
+}
+
 interface OutlineNode {
   title: string
   pageNumber: number | null
   items: OutlineNode[]
 }
 
-type SidePanel = 'none' | 'outline' | 'hilite'
+type SidePanel = 'none' | 'outline' | 'hilite' | 'comments' | 'pages'
 
 // Shared palette: amber for highlight matches the existing export-time
 // highlight-overlay color (PdfHighlightOverlayGenerator's amber-400), so a
@@ -55,6 +103,8 @@ const PEN_COLORS = ['#1e293b', '#ef4444', '#3b82f6', '#22c55e', '#f59e0b']
 const HIGHLIGHTER_COLORS = ['#facc15', '#4ade80', '#60a5fa', '#f472b6', '#fb923c']
 const PEN_SIZE = 0.004
 const HIGHLIGHTER_SIZE = 0.016
+
+const ANNOTATION_HINT_STORAGE_KEY = 'chandaktext:annotation-toolbar-hint-dismissed'
 
 // perfect-freehand's `size` option is in the same unit as the input
 // points - since our points are 0-1 page-normalized, `size` must also be
@@ -134,7 +184,12 @@ function annotationAnchor(a: Annotation): { x: number; y: number } | null {
  * transient selection gesture (closed freehand path -> point-in-polygon
  * against every annotation's anchor point on the page), not a stored type.
  */
-export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps) {
+export default function PdfViewer({
+  documentId,
+  onSaveExcerpt,
+  initialPage,
+  onSwitchToWorkspace,
+}: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [numPages, setNumPages] = useState(0)
   const [pdfDoc, setPdfDoc] = useState<Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']> | null>(
@@ -144,6 +199,42 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   const [scale] = useState(1.2)
   const [error, setError] = useState<string | null>(null)
   const [tool, setTool] = useState<AnnotationTool>('select')
+  const [readerMode, setReaderMode] = useState<ReaderMode>('document')
+  const [readingTheme, setReadingTheme] = useState<'dark' | 'sepia' | 'light'>(() => {
+    try {
+      const saved = localStorage.getItem('chandaktext:theme')
+      return saved === 'dark' ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
+
+  useEffect(() => {
+    const observer = new MutationObserver(() => {
+      const t = document.documentElement.getAttribute('data-theme')
+      if (t === 'light') setReadingTheme('light')
+      else if (t === 'dark') setReadingTheme('dark')
+    })
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
+    return () => observer.disconnect()
+  }, [])
+
+  // Entering Drawing mode gets you drawing immediately (auto-picks the pen
+  // if you weren't already using a drawing tool); entering Document mode
+  // hands reading/selection back immediately (drops out of whatever
+  // drawing tool was active) - matches the LiquidText reference
+  // screenshots' mode-switch behavior. Comment is deliberately excluded
+  // from both resets: it isn't a drawing tool and isn't disruptive to
+  // reading, so switching modes shouldn't interrupt placing one.
+  function switchReaderMode(mode: ReaderMode) {
+    setReaderMode(mode)
+    if (mode === 'drawing' && tool === 'select') {
+      setTool('pen')
+    } else if (mode === 'document' && (tool === 'pen' || tool === 'highlighter' || tool === 'eraser' || tool === 'lasso')) {
+      setTool('select')
+    }
+  }
+
   const [penColor, setPenColor] = useState(PEN_COLORS[0])
   const [highlighterColor, setHighlighterColor] = useState(HIGHLIGHTER_COLORS[0])
   const [pendingComment, setPendingComment] = useState<{
@@ -160,10 +251,183 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   const erasedThisDragRef = useRef<Set<string>>(new Set())
   const [sidePanel, setSidePanel] = useState<SidePanel>('none')
   const [outline, setOutline] = useState<OutlineNode[]>([])
+  const [squeezeMode, setSqueezeMode] = useState<boolean>(false)
+  const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set())
+
+  // Advocate Court Paper-Book States (reorder pleadings, rotate scans, tag exhibits, exclude unneeded pages)
+  const [pageRotations, setPageRotations] = useState<Record<number, number>>({})
+  const [pageLabels, setPageLabels] = useState<Record<number, string>>({})
+  const [pageOrder, setPageOrder] = useState<number[]>([])
+  const [excludedPages, setExcludedPages] = useState<Set<number>>(new Set())
+  const [copyCitationSuccess, setCopyCitationSuccess] = useState(false)
+
+  useEffect(() => {
+    if (numPages > 0) {
+      setPageOrder((prev) => (prev.length === numPages ? prev : Array.from({ length: numPages }, (_, i) => i + 1)))
+    }
+  }, [numPages])
+
+  function rotatePage(pageNumber: number) {
+    setPageRotations((prev) => {
+      const cur = prev[pageNumber] ?? 0
+      return { ...prev, [pageNumber]: (cur + 90) % 360 }
+    })
+  }
+
+  function movePage(index: number, direction: 'up' | 'down') {
+    setPageOrder((prev) => {
+      const targetIdx = direction === 'up' ? index - 1 : index + 1
+      if (targetIdx < 0 || targetIdx >= prev.length) return prev
+      const next = [...prev]
+      const temp = next[index]
+      next[index] = next[targetIdx]
+      next[targetIdx] = temp
+      return next
+    })
+  }
+
+  function toggleExcludePage(pageNumber: number) {
+    setExcludedPages((prev) => {
+      const next = new Set(prev)
+      if (next.has(pageNumber)) {
+        next.delete(pageNumber)
+      } else {
+        next.add(pageNumber)
+      }
+      return next
+    })
+  }
+
+  function setPageLegalLabel(pageNumber: number, label: string) {
+    setPageLabels((prev) => {
+      if (!label.trim()) {
+        const next = { ...prev }
+        delete next[pageNumber]
+        return next
+      }
+      return { ...prev, [pageNumber]: label.trim() }
+    })
+  }
+
+  function resetPaperBook() {
+    setPageOrder(Array.from({ length: numPages }, (_, i) => i + 1))
+    setPageRotations({})
+    setExcludedPages(new Set())
+  }
+
+  function toggleExpandRange(startPage: number, endPage: number) {
+    setExpandedPages((prev) => {
+      const next = new Set(prev)
+      for (let p = startPage; p <= endPage; p++) {
+        if (next.has(p)) {
+          next.delete(p)
+        } else {
+          next.add(p)
+        }
+      }
+      return next
+    })
+  }
+
+  // Phase 5 (discoverability): the drawing engine is real and fully built,
+  // but nothing on the page points at it - a first-time user has no reason
+  // to notice Pen/Highlighter/Lasso exist. Shown once, globally (not
+  // per-document - it's introducing the toolbar itself, not this PDF), then
+  // never again on this browser.
+  const [showAnnotationHint, setShowAnnotationHint] = useState(() => {
+    try {
+      return localStorage.getItem(ANNOTATION_HINT_STORAGE_KEY) !== '1'
+    } catch {
+      return true
+    }
+  })
+  const dismissAnnotationHint = useCallback(() => {
+    setShowAnnotationHint(false)
+    try {
+      localStorage.setItem(ANNOTATION_HINT_STORAGE_KEY, '1')
+    } catch {
+      // Private-browsing/blocked storage: dismissal just won't persist
+      // across reloads, which is a harmless degradation, not a bug.
+    }
+  }, [])
 
   const { data: annotations } = useAnnotations(documentId)
   const createAnnotation = useCreateAnnotation(documentId)
   const deleteAnnotation = useDeleteAnnotation(documentId)
+
+  // Undo/redo for drawing actions - see UndoEntry's docblock.
+  const [undoStack, setUndoStack] = useState<UndoEntry[]>([])
+  const [redoStack, setRedoStack] = useState<UndoEntry[]>([])
+
+  function recordCreate(data: CreateAnnotationInput, created: Annotation) {
+    setRedoStack([])
+    setUndoStack((s) => [...s, { id: created.id, present: true, data }])
+  }
+
+  function recordDelete(annotation: Annotation) {
+    setRedoStack([])
+    setUndoStack((s) => [
+      ...s,
+      {
+        id: annotation.id,
+        present: false,
+        data: {
+          page_number: annotation.page_number,
+          type: annotation.type,
+          color: annotation.color ?? undefined,
+          comment_text: annotation.comment_text ?? undefined,
+          payload: annotation.payload,
+        },
+      },
+    ])
+  }
+
+  async function toggleEntry(entry: UndoEntry): Promise<UndoEntry> {
+    if (entry.present) {
+      await deleteAnnotation.mutateAsync(entry.id)
+      return { ...entry, present: false }
+    }
+    const created = await createAnnotation.mutateAsync(entry.data)
+    return { ...entry, id: created.id, present: true }
+  }
+
+  async function handleUndo() {
+    const entry = undoStack[undoStack.length - 1]
+    if (!entry) return
+    const toggled = await toggleEntry(entry)
+    setUndoStack((s) => s.slice(0, -1))
+    setRedoStack((s) => [...s, toggled])
+  }
+
+  async function handleRedo() {
+    const entry = redoStack[redoStack.length - 1]
+    if (!entry) return
+    const toggled = await toggleEntry(entry)
+    setRedoStack((s) => s.slice(0, -1))
+    setUndoStack((s) => [...s, toggled])
+  }
+
+  // Phase 6 (AI annotation assistance): both suggest-only / read-only -
+  // summarizing synthesizes the highlights that already exist, suggesting
+  // just surfaces candidate passages as text for the reader to go find and
+  // highlight themselves (no bounding-box info comes back from the model,
+  // so there's nothing to auto-apply even if we wanted to).
+  const summarizeHighlights = useSummarizeHighlights()
+  const suggestHighlights = useSuggestHighlights()
+  const [highlightsSummary, setHighlightsSummary] = useState<string | null>(null)
+  const [suggestedHighlights, setSuggestedHighlights] = useState<string[] | null>(null)
+
+  // Phase 7: jump to the requested page once pages have actually rendered
+  // (pdfDoc truthy means numPages/PdfPage elements exist for jumpToPage's
+  // DOM query to find) - re-runs if the caller passes a new initialPage
+  // while already viewing this same document (e.g. clicking a second
+  // search result for the same PDF).
+  useEffect(() => {
+    if (pdfDoc && initialPage) {
+      jumpToPage(initialPage)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pdfDoc, initialPage])
 
   const annotationsByPage = useMemo(() => {
     const map = new Map<number, Annotation[]>()
@@ -350,21 +614,26 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
     }
   }, [selection, pendingComment])
 
-  function confirmExcerpt() {
+  function confirmExcerpt(tag?: string) {
     if (!selection) return
-    onSaveExcerpt({ pageNumber: selection.pageNumber, text: selection.text, rects: selection.rects })
+    onSaveExcerpt({ pageNumber: selection.pageNumber, text: selection.text, rects: selection.rects, tag })
     setSelection(null)
     window.getSelection()?.removeAllRanges()
   }
 
+  function confirmLegalExcerpt(tag: string) {
+    confirmExcerpt(tag)
+  }
+
   function confirmHighlight(type: 'highlight' | 'underline') {
     if (!selection) return
-    createAnnotation.mutate({
+    const input: CreateAnnotationInput = {
       page_number: selection.pageNumber,
       type,
       color: type === 'highlight' ? HIGHLIGHT_COLOR : UNDERLINE_COLOR,
       payload: { rects: selection.rects, text: selection.text },
-    })
+    }
+    createAnnotation.mutate(input, { onSuccess: (created) => recordCreate(input, created) })
     setSelection(null)
     window.getSelection()?.removeAllRanges()
   }
@@ -374,13 +643,14 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
       setPendingComment(null)
       return
     }
-    createAnnotation.mutate({
+    const input: CreateAnnotationInput = {
       page_number: pendingComment.pageNumber,
       type: 'comment',
       color: COMMENT_COLOR,
       comment_text: commentDraft.trim(),
       payload: { x: pendingComment.x, y: pendingComment.y },
-    })
+    }
+    createAnnotation.mutate(input, { onSuccess: (created) => recordCreate(input, created) })
     setPendingComment(null)
     setCommentDraft('')
     setTool('select')
@@ -432,6 +702,7 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
           if (hit) {
             erasedThisDragRef.current.add(a.id)
             deleteAnnotation.mutate(a.id)
+            recordDelete(a)
           }
         }
       }
@@ -447,12 +718,13 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
           size: tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE,
           tool,
         }
-        createAnnotation.mutate({
+        const input: CreateAnnotationInput = {
           page_number: activeStroke.pageNumber,
           type: 'ink',
           color: tool === 'pen' ? penColor : highlighterColor,
           payload: payload as unknown as Record<string, unknown>,
-        })
+        }
+        createAnnotation.mutate(input, { onSuccess: (created) => recordCreate(input, created) })
       }
       setActiveStroke(null)
 
@@ -475,7 +747,9 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
   function deleteLassoSelection() {
     if (!lassoSelection) return
     for (const id of lassoSelection.ids) {
+      const annotation = annotations?.find((a) => a.id === id)
       deleteAnnotation.mutate(id)
+      if (annotation) recordDelete(annotation)
     }
     setLassoSelection(null)
   }
@@ -498,6 +772,67 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
     [annotations],
   )
 
+  const commentList = useMemo(
+    () =>
+      (annotations ?? [])
+        .filter((a) => a.type === 'comment')
+        .sort((a, b) => a.page_number - b.page_number),
+    [annotations],
+  )
+
+  type PageSegment =
+    | { type: 'page'; pageNumber: number }
+    | { type: 'collapsed'; startPage: number; endPage: number; count: number }
+
+  const pageSegments: PageSegment[] = useMemo(() => {
+    const activeOrder = (pageOrder.length === numPages ? pageOrder : Array.from({ length: numPages }, (_, i) => i + 1))
+      .filter((p) => !excludedPages.has(p))
+
+    if (!squeezeMode || activeOrder.length === 0) {
+      return activeOrder.map((p) => ({ type: 'page' as const, pageNumber: p }))
+    }
+
+    const segments: PageSegment[] = []
+    let collapsedCount = 0
+    let collapsedStart: number | null = null
+    let collapsedEnd: number | null = null
+
+    for (const p of activeOrder) {
+      const hasAnnotations = (annotationsByPage.get(p)?.length ?? 0) > 0
+      const isManuallyExpanded = expandedPages.has(p)
+
+      if (hasAnnotations || isManuallyExpanded) {
+        if (collapsedCount > 0 && collapsedStart !== null && collapsedEnd !== null) {
+          segments.push({
+            type: 'collapsed',
+            startPage: collapsedStart,
+            endPage: collapsedEnd,
+            count: collapsedCount,
+          })
+          collapsedCount = 0
+          collapsedStart = null
+          collapsedEnd = null
+        }
+        segments.push({ type: 'page', pageNumber: p })
+      } else {
+        if (collapsedStart === null) collapsedStart = p
+        collapsedEnd = p
+        collapsedCount++
+      }
+    }
+
+    if (collapsedCount > 0 && collapsedStart !== null && collapsedEnd !== null) {
+      segments.push({
+        type: 'collapsed',
+        startPage: collapsedStart,
+        endPage: collapsedEnd,
+        count: collapsedCount,
+      })
+    }
+
+    return segments
+  }, [squeezeMode, numPages, pageOrder, excludedPages, annotationsByPage, expandedPages])
+
   if (error) {
     return <p className="p-4 text-sm text-red-400">{error}</p>
   }
@@ -506,46 +841,31 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex flex-wrap items-center gap-1 border-b border-slate-800 bg-slate-900/80 px-2 py-1.5">
-        <ToolButton active={tool === 'select'} onClick={() => setTool('select')}>
-          Select
-        </ToolButton>
-        <ToolButton active={tool === 'pen'} onClick={() => setTool('pen')} title="Freehand pen">
-          ✏️ Pen
-        </ToolButton>
-        <ToolButton active={tool === 'highlighter'} onClick={() => setTool('highlighter')} title="Freehand highlighter">
-          🖊️ Highlighter
-        </ToolButton>
-        <ToolButton active={tool === 'lasso'} onClick={() => setTool('lasso')} title="Draw a loop to select annotations">
-          🔗 Lasso
-        </ToolButton>
-        <ToolButton active={tool === 'eraser'} onClick={() => setTool('eraser')} title="Drag over a stroke or highlight to remove it">
-          🧽 Eraser
-        </ToolButton>
-        <ToolButton active={tool === 'comment'} onClick={() => setTool('comment')} title="Click anywhere on the page to pin a comment">
-          💬 Comment
-        </ToolButton>
-
-        {tool === 'pen' && (
-          <ColorSwatches colors={PEN_COLORS} active={penColor} onPick={setPenColor} />
-        )}
-        {tool === 'highlighter' && (
-          <ColorSwatches colors={HIGHLIGHTER_COLORS} active={highlighterColor} onPick={setHighlighterColor} />
-        )}
-
-        <div className="ml-auto flex items-center gap-1">
-          <ToolButton active={sidePanel === 'outline'} onClick={() => setSidePanel((p) => (p === 'outline' ? 'none' : 'outline'))} title="Table of contents">
-            📑 Outline
-          </ToolButton>
-          <ToolButton active={sidePanel === 'hilite'} onClick={() => setSidePanel((p) => (p === 'hilite' ? 'none' : 'hilite'))} title="All highlights in this document">
-            🟨 Highlights
-          </ToolButton>
+      {showAnnotationHint && (
+        <div className="flex items-center gap-3 border-b border-cyan-500/20 bg-cyan-500/[0.07] px-4 py-2 text-xs text-cyan-100">
+          <span className="text-base leading-none" aria-hidden="true">
+            ✨
+          </span>
+          <p className="flex-1 leading-snug">
+            New: draw, highlight, and annotate the page directly with{' '}
+            <span className="font-medium text-cyan-300">Pen</span>,{' '}
+            <span className="font-medium text-cyan-300">Highlighter</span>, and{' '}
+            <span className="font-medium text-cyan-300">Lasso</span> in the Drawing tab below.
+          </p>
+          <button
+            type="button"
+            onClick={dismissAnnotationHint}
+            className="shrink-0 rounded px-1.5 py-0.5 text-cyan-300/70 transition-colors hover:bg-cyan-500/10 hover:text-cyan-200"
+            aria-label="Dismiss"
+          >
+            ✕
+          </button>
         </div>
-      </div>
+      )}
 
       <div className="relative flex flex-1 overflow-hidden">
         {sidePanel !== 'none' && (
-          <div className="w-64 shrink-0 overflow-y-auto border-r border-slate-800 bg-slate-900 p-3">
+          <div className="w-72 shrink-0 overflow-y-auto border-r border-slate-200/90 bg-white p-3.5 shadow-xs text-slate-800">
             {sidePanel === 'outline' &&
               (outline.length === 0 ? (
                 <p className="text-xs text-slate-500">This PDF has no table of contents.</p>
@@ -553,92 +873,573 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
                 <OutlineList nodes={outline} onJump={jumpToPage} />
               ))}
 
-            {sidePanel === 'hilite' &&
-              (highlightList.length === 0 ? (
-                <p className="text-xs text-slate-500">No highlights yet - select text and choose Highlight.</p>
-              ) : (
-                <ul className="flex flex-col gap-2">
-                  {highlightList.map((a) => (
-                    <li key={a.id}>
-                      <button
-                        type="button"
-                        onClick={() => jumpToPage(a.page_number)}
-                        className="w-full rounded-md border-l-2 bg-slate-800/60 p-2 text-left text-xs text-slate-200 hover:bg-slate-800"
-                        style={{ borderColor: a.color ?? HIGHLIGHT_COLOR }}
+            {sidePanel === 'hilite' && (
+              <div className="flex flex-col gap-3">
+                <div className="flex flex-col gap-1.5 border-b border-slate-200 pb-3">
+                  <button
+                    type="button"
+                    disabled={summarizeHighlights.isPending}
+                    onClick={() =>
+                      summarizeHighlights.mutate(documentId, {
+                        onSuccess: (summary) => setHighlightsSummary(summary),
+                      })
+                    }
+                    className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-left text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors shadow-xs"
+                  >
+                    {summarizeHighlights.isPending ? 'Summarizing…' : '✨ AI: Summarize my highlights'}
+                  </button>
+                  {highlightsSummary && (
+                    <p className="rounded-xl bg-slate-50 border border-slate-200 p-2.5 text-xs leading-relaxed text-slate-700">
+                      {highlightsSummary}
+                    </p>
+                  )}
+
+                  <button
+                    type="button"
+                    disabled={suggestHighlights.isPending}
+                    onClick={() =>
+                      suggestHighlights.mutate(documentId, {
+                        onSuccess: (suggestions) => setSuggestedHighlights(suggestions),
+                      })
+                    }
+                    className="rounded-xl border border-blue-200 bg-blue-50 px-3 py-2 text-left text-xs font-bold text-blue-700 hover:bg-blue-100 disabled:opacity-50 transition-colors shadow-xs"
+                  >
+                    {suggestHighlights.isPending ? 'Thinking…' : '✨ AI: Suggest highlights'}
+                  </button>
+                  {suggestedHighlights && (
+                    <div className="flex flex-col gap-1.5">
+                      {suggestedHighlights.length === 0 ? (
+                        <p className="text-xs text-slate-500">No suggestions found.</p>
+                      ) : (
+                        <>
+                          <p className="text-[10px] text-slate-500 font-medium">
+                            Find and select these passages to highlight them yourself:
+                          </p>
+                          {suggestedHighlights.map((s, i) => (
+                            <p key={i} className="rounded-xl bg-slate-50 border border-slate-200 p-2 text-xs leading-snug text-slate-700">
+                              “{s}”
+                            </p>
+                          ))}
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {highlightList.length === 0 ? (
+                  <p className="text-xs text-slate-500">No highlights yet - select text and choose Highlight.</p>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {highlightList.map((a) => (
+                      <li key={a.id}>
+                        <button
+                          type="button"
+                          onClick={() => jumpToPage(a.page_number)}
+                          className="w-full rounded-xl border border-slate-200/80 border-l-4 bg-slate-50 p-2.5 text-left text-xs text-slate-800 hover:bg-slate-100 transition-colors shadow-xs"
+                          style={{ borderLeftColor: a.color ?? HIGHLIGHT_COLOR }}
+                        >
+                          <span className="block text-[10px] font-semibold text-slate-500">Page {a.page_number}</span>
+                          {(a.payload.text as string | undefined) ?? ''}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {sidePanel === 'comments' && (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                    Comments ({commentList.length})
+                  </h3>
+                  <span className="text-[10px] text-slate-500">Click to jump</span>
+                </div>
+
+                {commentList.length === 0 ? (
+                  <p className="text-xs text-slate-500">
+                    No comments yet — in Document mode, select Comment and click anywhere on the page to leave one.
+                  </p>
+                ) : (
+                  <ul className="flex flex-col gap-2">
+                    {commentList.map((c) => (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            jumpToPage(c.page_number)
+                            setOpenComment(c)
+                          }}
+                          className="w-full rounded-xl border border-slate-200/80 border-l-4 bg-slate-50 p-2.5 text-left text-xs text-slate-800 transition-colors hover:bg-slate-100 shadow-xs"
+                          style={{ borderLeftColor: c.color ?? COMMENT_COLOR }}
+                        >
+                          <div className="mb-1 flex items-center justify-between text-[10px] text-slate-500">
+                            <span className="font-bold text-rose-600">Page {c.page_number}</span>
+                            <span className="text-[10px] text-slate-400">Open 💬</span>
+                          </div>
+                          <p className="line-clamp-3 font-normal leading-snug text-slate-700">{c.comment_text}</p>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+
+            {sidePanel === 'pages' && (
+              <div className="flex flex-col gap-3">
+                <div className="flex items-center justify-between border-b border-slate-200 pb-2">
+                  <div>
+                    <h3 className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-amber-700">
+                      <span>⚖️</span>
+                      <span>Paper-Book Manager</span>
+                    </h3>
+                    <p className="text-[10px] text-slate-500">
+                      {pageOrder.length - excludedPages.size} of {numPages} pages active
+                    </p>
+                  </div>
+                  {(pageOrder.some((p, i) => p !== i + 1) || Object.keys(pageRotations).length > 0 || excludedPages.size > 0) && (
+                    <button
+                      type="button"
+                      onClick={resetPaperBook}
+                      className="rounded-lg bg-slate-100 px-2.5 py-1 text-[10px] font-bold text-slate-700 transition-colors hover:bg-slate-200 border border-slate-200"
+                      title="Reset pages to original document order and 0° rotation"
+                    >
+                      ↺ Reset
+                    </button>
+                  )}
+                </div>
+
+                <div className="rounded-xl border border-amber-200 bg-amber-50/80 p-2.5 text-[11px] leading-relaxed text-amber-900">
+                  <span className="font-bold text-amber-800">Advocate Court Tool:</span> Reorder pleadings, rotate inverted scans, assign exhibit stamps, or exclude unneeded pages for courtroom presentation.
+                </div>
+
+                <div className="flex flex-col gap-2.5">
+                  {(pageOrder.length === numPages ? pageOrder : Array.from({ length: numPages }, (_, i) => i + 1)).map((p, idx) => {
+                    const pageAnnos = annotationsByPage.get(p) ?? []
+                    const isExcluded = excludedPages.has(p)
+                    const rot = pageRotations[p] ?? 0
+                    const label = pageLabels[p]
+
+                    return (
+                      <div
+                        key={p}
+                        className={`rounded-xl border p-2.5 transition-all shadow-xs ${
+                          isExcluded
+                            ? 'border-red-200 bg-red-50/60 opacity-60'
+                            : 'border-slate-200 bg-slate-50/80 hover:border-slate-300 hover:bg-white'
+                        }`}
                       >
-                        <span className="block text-[10px] text-slate-500">Page {a.page_number}</span>
-                        {(a.payload.text as string | undefined) ?? ''}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              ))}
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-1.5">
+                            <span className="flex h-5 w-5 items-center justify-center rounded bg-slate-200 text-[10px] font-bold text-slate-700">
+                              #{idx + 1}
+                            </span>
+                            <span className="text-xs font-bold text-slate-800">Page {p}</span>
+                            {rot > 0 && (
+                              <span className="rounded bg-sky-500/20 px-1 text-[9px] font-semibold text-sky-300">
+                                ↻ {rot}°
+                              </span>
+                            )}
+                            {pageAnnos.length > 0 && (
+                              <span className="rounded-full bg-cyan-500/20 px-1.5 text-[9px] font-semibold text-cyan-300">
+                                {pageAnnos.length} {pageAnnos.length === 1 ? 'item' : 'items'}
+                              </span>
+                            )}
+                          </div>
+                          {isExcluded && (
+                            <span className="rounded bg-red-500/20 px-1.5 text-[9px] font-semibold text-red-300">
+                              Excluded
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Exhibit / Court Label */}
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          {label ? (
+                            <div className="flex items-center gap-1 rounded-md bg-amber-100 border border-amber-300 px-2 py-0.5 text-[10px] font-bold text-amber-900 shadow-xs">
+                              <span>⚖️ {label}</span>
+                              <button
+                                type="button"
+                                onClick={() => setPageLegalLabel(p, '')}
+                                className="ml-1 text-amber-600 hover:text-amber-900 cursor-pointer"
+                                title="Remove label"
+                              >
+                                ×
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="flex flex-wrap gap-1">
+                              {['Petition', 'Order', 'Exh. P-1', 'Exh. D-1', 'Annexure', 'Affidavit'].map((preset) => (
+                                <button
+                                  key={preset}
+                                  type="button"
+                                  onClick={() => setPageLegalLabel(p, preset)}
+                                  className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] font-medium text-slate-600 transition-colors hover:border-amber-400 hover:text-amber-800 hover:bg-amber-50 cursor-pointer"
+                                >
+                                  +{preset}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Action buttons */}
+                        <div className="mt-2.5 flex items-center justify-between border-t border-slate-200 pt-2 text-xs">
+                          <div className="flex items-center gap-1">
+                            <button
+                              type="button"
+                              disabled={idx === 0}
+                              onClick={() => movePage(idx, 'up')}
+                              className="rounded-lg bg-slate-200/70 p-1 text-slate-700 transition-colors hover:bg-slate-300 disabled:opacity-30 cursor-pointer"
+                              title="Move page up in Paper-Book"
+                            >
+                              ⬆
+                            </button>
+                            <button
+                              type="button"
+                              disabled={idx === (pageOrder.length || numPages) - 1}
+                              onClick={() => movePage(idx, 'down')}
+                              className="rounded-lg bg-slate-200/70 p-1 text-slate-700 transition-colors hover:bg-slate-300 disabled:opacity-30 cursor-pointer"
+                              title="Move page down in Paper-Book"
+                            >
+                              ⬇
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => rotatePage(p)}
+                              className="rounded-lg bg-slate-200/70 px-2 py-1 text-[10px] font-semibold text-slate-700 transition-colors hover:bg-slate-300 cursor-pointer"
+                              title="Rotate 90 degrees clockwise"
+                            >
+                              ↻ 90°
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => toggleExcludePage(p)}
+                              className={`rounded-lg px-2 py-1 text-[10px] font-bold transition-colors cursor-pointer ${
+                                isExcluded
+                                  ? 'bg-emerald-100 text-emerald-800 hover:bg-emerald-200 border border-emerald-300'
+                                  : 'bg-rose-100 text-rose-800 hover:bg-rose-200 border border-rose-300'
+                              }`}
+                              title={isExcluded ? 'Include back in Paper-Book' : 'Exclude from Paper-Book'}
+                            >
+                              {isExcluded ? 'Include' : 'Exclude'}
+                            </button>
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => jumpToPage(p)}
+                            className="rounded-lg bg-blue-50 border border-blue-200 px-2.5 py-1 text-[10px] font-bold text-blue-700 transition-colors hover:bg-blue-100 cursor-pointer"
+                          >
+                            Jump →
+                          </button>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
-      <div ref={containerRef} className="relative flex-1 overflow-auto bg-slate-900 p-4">
+      <div
+        ref={containerRef}
+        className={`relative flex-1 overflow-auto p-4 transition-colors duration-300 ${
+          readingTheme === 'sepia'
+            ? 'bg-[#f4ecd8] text-[#433422]'
+            : readingTheme === 'light'
+              ? 'bg-slate-100 text-slate-900'
+              : 'bg-slate-900 text-slate-100'
+        }`}
+      >
         {!pdfDoc && <p className="text-sm text-slate-400">Loading PDF…</p>}
 
         <div className="mx-auto flex max-w-3xl flex-col gap-4">
+          {squeezeMode && (
+            <div
+              className={`sticky top-0 z-10 flex items-center justify-between rounded-2xl border px-4 py-3 shadow-lg backdrop-blur-md transition-all ${
+                readingTheme === 'sepia'
+                  ? 'border-[#b45309]/50 bg-[#fffbeb] text-[#451a03]'
+                  : readingTheme === 'dark'
+                    ? 'border-amber-500/40 bg-amber-950/40 text-amber-200'
+                    : 'border-amber-300 bg-amber-50 text-amber-950'
+              }`}
+            >
+              <div className="flex items-center gap-2.5">
+                <span className="text-xl">🤏</span>
+                <div>
+                  <span
+                    className={`text-xs font-black tracking-tight ${
+                      readingTheme === 'sepia'
+                        ? 'text-[#78350f]'
+                        : readingTheme === 'dark'
+                          ? 'text-amber-300'
+                          : 'text-amber-900'
+                    }`}
+                  >
+                    Squeeze Mode Active
+                  </span>
+                  <p
+                    className={`text-[11px] font-semibold leading-snug ${
+                      readingTheme === 'sepia'
+                        ? 'text-[#92400e]'
+                        : readingTheme === 'dark'
+                          ? 'text-amber-200/80'
+                          : 'text-amber-800'
+                    }`}
+                  >
+                    Unhighlighted pages collapsed so your notes and highlights meet side-by-side
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setExpandedPages(new Set())}
+                  className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                    readingTheme === 'sepia'
+                      ? 'bg-[#b45309] text-white hover:bg-[#92400e]'
+                      : readingTheme === 'dark'
+                        ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                        : 'bg-amber-200/90 text-amber-950 hover:bg-amber-300'
+                  }`}
+                >
+                  Collapse All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSqueezeMode(false)}
+                  className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-bold text-white transition-all hover:bg-black cursor-pointer shadow-2xs"
+                >
+                  Exit Squeeze
+                </button>
+              </div>
+            </div>
+          )}
+
           {pdfDoc &&
-            Array.from({ length: numPages }, (_, i) => i + 1).map((pageNumber) => (
-              <PdfPage
-                key={pageNumber}
-                pdfDoc={pdfDoc}
-                pageNumber={pageNumber}
-                scale={scale}
-                onMouseUp={handleMouseUp}
-                onPageClick={handlePageClick}
-                tool={tool}
-                drawingToolActive={drawingToolActive}
-                annotations={annotationsByPage.get(pageNumber) ?? []}
-                onOpenComment={setOpenComment}
-                onDeleteAnnotation={(id) => deleteAnnotation.mutate(id)}
-                activeStroke={activeStroke?.pageNumber === pageNumber ? activeStroke.points : null}
-                activeStrokeColor={tool === 'pen' ? penColor : highlighterColor}
-                activeStrokeSize={tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE}
-                lassoPoints={lassoPoints?.pageNumber === pageNumber ? lassoPoints.points : null}
-                lassoSelection={lassoSelection?.pageNumber === pageNumber ? lassoSelection.ids : []}
-                onStrokeStart={handleStrokeStart}
-                onStrokeMove={handleStrokeMove}
-                onStrokeEnd={handleStrokeEnd}
-              />
-            ))}
+            pageSegments.map((segment) => {
+              if (segment.type === 'collapsed') {
+                return (
+                  <div
+                    key={`collapsed-${segment.startPage}-${segment.endPage}`}
+                    onClick={() => toggleExpandRange(segment.startPage, segment.endPage)}
+                    className={`group flex cursor-pointer items-center justify-between rounded-2xl border-2 border-dashed px-4 py-3.5 shadow-sm transition-all active:scale-[0.99] ${
+                      readingTheme === 'sepia'
+                        ? 'border-[#b45309]/50 bg-[#eedcb4] text-[#451a03] hover:bg-[#e4d1a3]'
+                        : readingTheme === 'dark'
+                          ? 'border-cyan-500/40 bg-slate-800/80 text-slate-100 hover:bg-slate-800'
+                          : 'border-slate-300 bg-white text-slate-800 hover:border-blue-400 hover:bg-blue-50/40'
+                    }`}
+                    title="Click to expand these unannotated pages"
+                  >
+                    <div className="flex items-center gap-3">
+                      <span
+                        className={`flex h-8 w-8 items-center justify-center rounded-xl text-xs font-extrabold ${
+                          readingTheme === 'sepia'
+                            ? 'bg-[#b45309] text-white'
+                            : readingTheme === 'dark'
+                              ? 'bg-cyan-500/20 text-cyan-300'
+                              : 'bg-blue-100 text-blue-700'
+                        }`}
+                      >
+                        ↕
+                      </span>
+                      <div>
+                        <span
+                          className={`text-xs font-extrabold ${
+                            readingTheme === 'sepia'
+                              ? 'text-[#451a03]'
+                              : readingTheme === 'dark'
+                                ? 'text-slate-100'
+                                : 'text-slate-900'
+                          }`}
+                        >
+                          Pages {segment.startPage}{segment.startPage === segment.endPage ? '' : `–${segment.endPage}`} Collapsed
+                        </span>
+                        <p
+                          className={`text-[11px] font-medium ${
+                            readingTheme === 'sepia'
+                              ? 'text-[#78350f]'
+                              : readingTheme === 'dark'
+                                ? 'text-slate-400'
+                                : 'text-slate-500'
+                          }`}
+                        >
+                          {segment.count} {segment.count === 1 ? 'page' : 'pages'} with no annotations
+                        </p>
+                      </div>
+                    </div>
+                    <span
+                      className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-2xs ${
+                        readingTheme === 'sepia'
+                          ? 'bg-[#78350f] text-white hover:bg-[#451a03]'
+                          : readingTheme === 'dark'
+                            ? 'bg-cyan-500/20 text-cyan-300'
+                            : 'bg-blue-600 text-white'
+                      }`}
+                    >
+                      Expand ＋
+                    </span>
+                  </div>
+                )
+              }
+
+              const pageNumber = segment.pageNumber
+              return (
+                <PdfPage
+                  key={pageNumber}
+                  pdfDoc={pdfDoc}
+                  theme={readingTheme}
+                  pageNumber={pageNumber}
+                  scale={scale}
+                  rotation={pageRotations[pageNumber] ?? 0}
+                  label={pageLabels[pageNumber]}
+                  onMouseUp={handleMouseUp}
+                  onPageClick={handlePageClick}
+                  tool={tool}
+                  drawingToolActive={drawingToolActive}
+                  annotations={annotationsByPage.get(pageNumber) ?? []}
+                  onOpenComment={setOpenComment}
+                  onDeleteAnnotation={(id) => {
+                    const annotation = annotations?.find((a) => a.id === id)
+                    deleteAnnotation.mutate(id)
+                    if (annotation) recordDelete(annotation)
+                  }}
+                  activeStroke={activeStroke?.pageNumber === pageNumber ? activeStroke.points : null}
+                  activeStrokeColor={tool === 'pen' ? penColor : highlighterColor}
+                  activeStrokeSize={tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE}
+                  lassoPoints={lassoPoints?.pageNumber === pageNumber ? lassoPoints.points : null}
+                  lassoSelection={lassoSelection?.pageNumber === pageNumber ? lassoSelection.ids : []}
+                  onStrokeStart={handleStrokeStart}
+                  onStrokeMove={handleStrokeMove}
+                  onStrokeEnd={handleStrokeEnd}
+                />
+              )
+            })}
         </div>
 
         {selection &&
           (() => {
-            const containerWidth = containerRef.current?.clientWidth ?? 0
-            const popupWidthEstimate = 260
-            const left = containerWidth
-              ? Math.min(Math.max(selection.anchor.x, 8), Math.max(containerWidth - popupWidthEstimate, 8))
-              : selection.anchor.x
-            const top = Math.max(selection.anchor.y - 8, 8)
+            const containerWidth = containerRef.current?.clientWidth ?? 800
+            // The popup has 9 action buttons and is around 660px wide
+            const popupWidth = 660
+            // Use available space ahead/left by centering over selection anchor and clamping safely
+            const idealLeft = selection.anchor.x - popupWidth / 2
+            const maxLeft = Math.max(16, containerWidth - popupWidth - 24)
+            const left = containerWidth > 0 ? Math.max(16, Math.min(idealLeft, maxLeft)) : selection.anchor.x
+            const top = Math.max(selection.anchor.y - 12, 12)
 
             return (
               <div
-                className="absolute z-10 flex -translate-y-full gap-1 rounded-md bg-slate-800 p-1 shadow-lg"
+                className="absolute z-30 flex flex-wrap items-center gap-1.5 rounded-2xl border border-slate-200/90 bg-white/95 p-2 shadow-[0_16px_40px_rgba(15,23,42,0.18)] backdrop-blur-md text-slate-800 max-w-[calc(100%-32px)]"
                 style={{ left, top }}
               >
-                <Button onClick={confirmExcerpt} className="text-xs">
-                  Excerpt
-                </Button>
+                <div
+                  draggable
+                  onDragStart={(e) => {
+                    e.dataTransfer.setData(
+                      'application/json',
+                      JSON.stringify({
+                        type: 'chandaktext/excerpt',
+                        documentId,
+                        pageNumber: selection.pageNumber,
+                        text: selection.text,
+                        rects: selection.rects,
+                      }),
+                    )
+                    e.dataTransfer.effectAllowed = 'copy'
+                  }}
+                  onClick={() => confirmExcerpt()}
+                  className="flex cursor-grab items-center gap-1.5 rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 px-3 py-1.5 text-xs font-bold text-white shadow-xs transition-all hover:from-blue-700 hover:to-indigo-700 active:cursor-grabbing active:scale-95 cursor-pointer"
+                  title="Drag directly to workspace canvas on the right, or click to add"
+                >
+                  <span>✋ Excerpt</span>
+                  <span className="rounded bg-white/20 px-1 text-[9px] font-medium uppercase tracking-wider text-white">
+                    Drag ➜
+                  </span>
+                </div>
                 <button
                   type="button"
                   onClick={() => confirmHighlight('highlight')}
-                  className="rounded px-2 py-1 text-xs font-medium text-slate-900"
-                  style={{ backgroundColor: HIGHLIGHT_COLOR }}
+                  className="rounded-xl px-2.5 py-1.5 text-xs font-bold text-amber-950 bg-amber-300 hover:bg-amber-400 border border-amber-400/60 shadow-xs transition-colors cursor-pointer"
                 >
                   Highlight
                 </button>
                 <button
                   type="button"
                   onClick={() => confirmHighlight('underline')}
-                  className="rounded border px-2 py-1 text-xs font-medium"
-                  style={{ borderColor: UNDERLINE_COLOR, color: UNDERLINE_COLOR }}
+                  className="rounded-xl border border-sky-300 bg-sky-50 px-2.5 py-1.5 text-xs font-bold text-sky-700 hover:bg-sky-100 transition-colors cursor-pointer"
                 >
                   Underline
                 </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!selection) return
+                    const quote = `"${selection.text}" — Page ${selection.pageNumber} (ChandakText Court Workspace)`
+                    navigator.clipboard.writeText(quote)
+                    setCopyCitationSuccess(true)
+                    setTimeout(() => setCopyCitationSuccess(false), 2000)
+                  }}
+                  className="flex items-center gap-1 rounded-xl bg-slate-100 hover:bg-slate-200 border border-slate-200/80 px-2.5 py-1.5 text-xs font-bold text-slate-700 transition-colors cursor-pointer"
+                  title="1-Tap copy formatted legal quote with page reference for court submissions"
+                >
+                  <span>📋</span>
+                  <span>{copyCitationSuccess ? '✓ Copied!' : 'Citation'}</span>
+                </button>
+                <div className="flex items-center gap-1 border-l border-slate-200 pl-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!selection) return
+                      const eventDate = window.prompt('Enter Event Date for Chronology (e.g. 14/03/2022 or 2022-03-14):', '')
+                      if (eventDate !== null) {
+                        const tag = eventDate.trim() ? `Date: ${eventDate.trim()}` : 'Chronology'
+                        confirmLegalExcerpt(tag)
+                      }
+                    }}
+                    className="rounded-lg bg-amber-50 hover:bg-amber-100 border border-amber-200 px-2 py-1 text-xs font-semibold text-amber-800 transition-colors cursor-pointer"
+                    title="Advocate: Pin to Case Chronology / List of Dates"
+                  >
+                    📅 Chronology
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmLegalExcerpt('Issue')}
+                    className="rounded-lg bg-purple-50 hover:bg-purple-100 border border-purple-200 px-2 py-1 text-xs font-semibold text-purple-800 transition-colors cursor-pointer"
+                    title="Advocate: Tag as Legal Issue / Question of Law"
+                  >
+                    ⚖️ Issue
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmLegalExcerpt('Precedent')}
+                    className="rounded-lg bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-1 text-xs font-semibold text-blue-800 transition-colors cursor-pointer"
+                    title="Advocate: Tag as Legal Citation / Precedent"
+                  >
+                    📜 Precedent
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmLegalExcerpt('Exhibit')}
+                    className="rounded-lg bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 px-2 py-1 text-xs font-semibold text-emerald-800 transition-colors cursor-pointer"
+                    title="Advocate: Tag as Court Evidence / Exhibit"
+                  >
+                    🔍 Exhibit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => confirmLegalExcerpt('Contradiction')}
+                    className="rounded-lg bg-rose-50 hover:bg-rose-100 border border-rose-200 px-2 py-1 text-xs font-semibold text-rose-800 transition-colors cursor-pointer"
+                    title="Advocate: Tag as Contradiction for Cross-Exam"
+                  >
+                    ⚠️ Contradiction
+                  </button>
+                </div>
               </div>
             )
           })()}
@@ -713,6 +1514,7 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
                   type="button"
                   onClick={() => {
                     deleteAnnotation.mutate(openComment.id)
+                    recordDelete(openComment)
                     setOpenComment(null)
                   }}
                   className="rounded px-2 py-1 text-xs text-red-400 hover:text-red-300"
@@ -732,31 +1534,188 @@ export default function PdfViewer({ documentId, onSaveExcerpt }: PdfViewerProps)
         )}
       </div>
       </div>
+
+      {/* Bottom-anchored contextual row + mode switch - matches the
+          LiquidText reference screenshots the user compared against: the
+          icon row directly above the mode switch is genuinely different
+          per mode (not the same tools reordered), and the mode switch
+          itself lives at the very bottom of the screen, not the top. */}
+      <div className="flex flex-wrap items-center justify-center gap-1.5 border-t border-slate-200/90 bg-white/95 px-3 py-1.5 shadow-[0_-1px_3px_rgba(0,0,0,0.03)] backdrop-blur-md">
+        {readerMode === 'drawing' ? (
+          <>
+            <BottomActionButton active={tool === 'select'} onClick={() => setTool('select')} icon="👆" label="Select" />
+            <BottomActionButton active={tool === 'pen'} onClick={() => setTool('pen')} icon="✏️" label="Pen" title="Freehand pen" />
+            <BottomActionButton
+              active={tool === 'highlighter'}
+              onClick={() => setTool('highlighter')}
+              icon="🖊️"
+              label="Highlighter"
+              title="Freehand highlighter"
+            />
+            <BottomActionButton
+              active={tool === 'eraser'}
+              onClick={() => setTool('eraser')}
+              icon="🧽"
+              label="Eraser"
+              title="Drag over a stroke or highlight to remove it"
+            />
+            <BottomActionButton
+              active={tool === 'lasso'}
+              onClick={() => setTool('lasso')}
+              icon="🔗"
+              label="Lasso"
+              title="Draw a loop to select annotations"
+            />
+            {tool === 'pen' && <ColorSwatches colors={PEN_COLORS} active={penColor} onPick={setPenColor} />}
+            {tool === 'highlighter' && (
+              <ColorSwatches colors={HIGHLIGHTER_COLORS} active={highlighterColor} onPick={setHighlighterColor} />
+            )}
+          </>
+        ) : (
+          <>
+            <BottomActionButton
+              active={tool === 'comment'}
+              onClick={() => setTool('comment')}
+              icon="💬"
+              label="Comment"
+              title="Click anywhere on the page to pin a comment"
+            />
+            <BottomActionButton
+              active={sidePanel === 'outline'}
+              onClick={() => setSidePanel((p) => (p === 'outline' ? 'none' : 'outline'))}
+              icon="📑"
+              label="Outline"
+              title="Table of contents"
+            />
+            <BottomActionButton
+              active={sidePanel === 'hilite'}
+              onClick={() => setSidePanel((p) => (p === 'hilite' ? 'none' : 'hilite'))}
+              icon="🟨"
+              label="HiLiteView"
+              title="All highlights in this document"
+            />
+            <BottomActionButton
+              active={sidePanel === 'pages'}
+              onClick={() => setSidePanel((p) => (p === 'pages' ? 'none' : 'pages'))}
+              icon="🖼️"
+              label="Pages"
+              title="Page thumbnails and manager"
+            />
+            <BottomActionButton
+              active={squeezeMode}
+              onClick={() => setSqueezeMode((s) => !s)}
+              icon="🤏"
+              label={squeezeMode ? 'Squeezed' : 'Squeeze'}
+              title="Squeeze document: collapses pages without annotations so highlights meet"
+            />
+            <BottomActionButton
+              active={readingTheme !== 'dark'}
+              onClick={() => {
+                const next = readingTheme === 'light' ? 'sepia' : readingTheme === 'sepia' ? 'dark' : 'light'
+                setReadingTheme(next)
+                document.documentElement.setAttribute('data-theme', next)
+                try {
+                  localStorage.setItem('chandaktext:theme', next)
+                } catch {}
+              }}
+              icon={readingTheme === 'dark' ? '🌙' : readingTheme === 'sepia' ? '📜' : '☀️'}
+              label={readingTheme === 'dark' ? 'Dark' : readingTheme === 'sepia' ? 'Sepia' : 'Light'}
+              title={`Reading theme: ${readingTheme}. Click to cycle Light, Warm Sepia, and Dark modes.`}
+            />
+          </>
+        )}
+
+        {/* Undo/redo: always available regardless of mode */}
+        <div className="ml-auto flex items-center gap-1">
+          <BottomActionButton
+            active={false}
+            disabled={undoStack.length === 0}
+            onClick={handleUndo}
+            icon="↩️"
+            label="Undo"
+            title={undoStack.length ? 'Undo the last drawing action' : 'Nothing to undo'}
+          />
+          <BottomActionButton
+            active={false}
+            disabled={redoStack.length === 0}
+            onClick={handleRedo}
+            icon="↪️"
+            label="Redo"
+            title={redoStack.length ? 'Redo the last undone action' : 'Nothing to redo'}
+          />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-3 border-t border-slate-200/90 bg-slate-50/95">
+        <ModeTab active={readerMode === 'drawing'} onClick={() => switchReaderMode('drawing')}>
+          Drawing
+        </ModeTab>
+        <ModeTab active={readerMode === 'document'} onClick={() => switchReaderMode('document')}>
+          Document
+        </ModeTab>
+        <ModeTab active={false} onClick={() => onSwitchToWorkspace?.()}>
+          Workspace
+        </ModeTab>
+      </div>
     </div>
   )
 }
 
-function ToolButton({
+function ModeTab({
   active,
   onClick,
-  title,
   children,
 }: {
   active: boolean
   onClick: () => void
-  title?: string
   children: React.ReactNode
 }) {
   return (
     <button
       type="button"
       onClick={onClick}
-      title={title}
-      className={`rounded-full px-3 py-1 text-xs font-medium transition-all ${
-        active ? 'scale-105 bg-accent/20 text-accent' : 'text-slate-400 hover:text-slate-200'
+      className={`w-full py-2.5 text-xs font-bold transition-all duration-200 cursor-pointer ${
+        active
+          ? 'bg-white text-blue-700 shadow-xs border-b-2 border-blue-600 font-extrabold'
+          : 'text-slate-500 hover:text-slate-900 hover:bg-slate-100/60'
       }`}
     >
       {children}
+    </button>
+  )
+}
+
+function BottomActionButton({
+  active,
+  onClick,
+  icon,
+  label,
+  title,
+  disabled,
+}: {
+  active: boolean
+  onClick: () => void
+  icon: string
+  label: string
+  title?: string
+  disabled?: boolean
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={title}
+      disabled={disabled}
+      className={`flex flex-col items-center gap-0.5 rounded-xl px-3 py-1.5 transition-all cursor-pointer ${
+        disabled
+          ? 'cursor-not-allowed opacity-30 text-slate-400'
+          : active
+            ? 'bg-blue-50 text-blue-700 shadow-xs font-bold border border-blue-200/80'
+            : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100/80'
+      }`}
+    >
+      <span className="text-lg leading-none">{icon}</span>
+      <span className="text-[10px] font-semibold">{label}</span>
     </button>
   )
 }
@@ -815,14 +1774,14 @@ function ColorSwatches({
   onPick: (color: string) => void
 }) {
   return (
-    <div className="ml-1 flex items-center gap-1 rounded-full bg-slate-800 px-1.5 py-1">
+    <div className="ml-1 flex items-center gap-1.5 rounded-full bg-slate-100 border border-slate-200/90 px-2 py-1 shadow-xs">
       {colors.map((c) => (
         <button
           key={c}
           type="button"
           onClick={() => onPick(c)}
-          className={`h-5 w-5 rounded-full border-2 transition-transform ${
-            active === c ? 'scale-110 border-white' : 'border-transparent'
+          className={`h-5 w-5 rounded-full border-2 transition-transform cursor-pointer ${
+            active === c ? 'scale-110 border-blue-600 ring-2 ring-blue-100' : 'border-white'
           }`}
           style={{ backgroundColor: c }}
         />
@@ -833,8 +1792,11 @@ function ColorSwatches({
 
 function PdfPage({
   pdfDoc,
+  theme = 'light',
   pageNumber,
   scale,
+  rotation = 0,
+  label,
   onMouseUp,
   onPageClick,
   tool,
@@ -852,8 +1814,11 @@ function PdfPage({
   onStrokeEnd,
 }: {
   pdfDoc: Awaited<ReturnType<typeof pdfjsLib.getDocument>['promise']>
+  theme?: 'dark' | 'sepia' | 'light'
   pageNumber: number
   scale: number
+  rotation?: number
+  label?: string
   onMouseUp: (pageNumber: number, pageEl: HTMLDivElement) => void
   onPageClick: (pageNumber: number, pageEl: HTMLDivElement, e: React.MouseEvent) => void
   tool: AnnotationTool
@@ -882,7 +1847,7 @@ function PdfPage({
 
     async function render() {
       const page = await pdfDoc.getPage(pageNumber)
-      const viewport = page.getViewport({ scale })
+      const viewport = page.getViewport({ scale, rotation })
 
       const canvas = canvasRef.current
       if (!canvas || cancelled) return
@@ -917,7 +1882,7 @@ function PdfPage({
     return () => {
       cancelled = true
     }
-  }, [pdfDoc, pageNumber, scale])
+  }, [pdfDoc, pageNumber, scale, rotation])
 
   function pointFromEvent(e: React.PointerEvent): StrokePoint {
     const rect = svgRef.current!.getBoundingClientRect()
@@ -930,7 +1895,17 @@ function PdfPage({
 
   function handlePointerDown(e: React.PointerEvent) {
     if (!drawingToolActive) return
-    e.currentTarget.setPointerCapture(e.pointerId)
+    try {
+      // Pointer capture keeps move/up events routed here even if the
+      // pointer leaves the SVG mid-stroke (fast strokes near a page
+      // edge) - a nice-to-have, not a requirement for drawing to work,
+      // so a capture failure (observed: Chrome throws
+      // "No active pointer with the given id is found" for some
+      // non-standard pointer sources) must not abort the stroke itself.
+      e.currentTarget.setPointerCapture(e.pointerId)
+    } catch {
+      // Ignored - see above.
+    }
     isDrawingRef.current = true
     onStrokeStart(pageNumber, pointFromEvent(e))
   }
@@ -958,13 +1933,34 @@ function PdfPage({
             : ''
 
   return (
-    <div
-      ref={wrapperRef}
-      data-page-number={pageNumber}
-      className={`relative mx-auto bg-white shadow-md ${cursorClass}`}
-      onMouseUp={() => wrapperRef.current && onMouseUp(pageNumber, wrapperRef.current)}
-      onClick={(e) => wrapperRef.current && onPageClick(pageNumber, wrapperRef.current, e)}
-    >
+    <div className="relative mx-auto flex flex-col items-center">
+      {label && (
+        <div className="mb-1 flex w-full items-center justify-between rounded-t-md bg-gradient-to-r from-amber-700 via-amber-600 to-amber-700 px-3 py-1.5 text-xs font-bold uppercase tracking-wider text-white shadow-md">
+          <div className="flex items-center gap-1.5">
+            <span>⚖️</span>
+            <span>{label}</span>
+          </div>
+          <span className="rounded bg-black/25 px-1.5 py-0.5 text-[9px] font-semibold text-amber-200">
+            Paper-Book Exhibit
+          </span>
+        </div>
+      )}
+      <div
+        ref={wrapperRef}
+        data-page-number={pageNumber}
+        className={`relative mx-auto bg-white shadow-md ${cursorClass} ${label ? 'rounded-b-md' : 'rounded-md'}`}
+        style={{
+          filter:
+            theme === 'sepia'
+              ? 'sepia(0.24) contrast(1.05)'
+              : theme === 'dark'
+                ? 'invert(0.9) hue-rotate(180deg) contrast(1.08)'
+                : 'none',
+          transition: 'filter 0.25s ease',
+        }}
+        onMouseUp={() => wrapperRef.current && onMouseUp(pageNumber, wrapperRef.current)}
+        onClick={(e) => wrapperRef.current && onPageClick(pageNumber, wrapperRef.current, e)}
+      >
       <canvas ref={canvasRef} />
       <div ref={textLayerRef} className="textLayer absolute left-0 top-0" />
 
@@ -1031,6 +2027,7 @@ function PdfPage({
             if (a.type === 'comment') {
               const px = (a.payload.x as number) * size.width
               const py = (a.payload.y as number) * size.height
+              const pinColor = a.color ?? COMMENT_COLOR
               return (
                 <g
                   key={a.id}
@@ -1038,11 +2035,24 @@ function PdfPage({
                   className="pointer-events-auto cursor-pointer"
                   onClick={(e) => {
                     e.stopPropagation()
-                    if (tool === 'select') onOpenComment(a)
+                    if (tool === 'select' || tool === 'comment') onOpenComment(a)
                   }}
                 >
-                  <circle r={8} fill={a.color ?? COMMENT_COLOR} stroke={isLassoSelected ? '#38bdf8' : 'white'} strokeWidth={isLassoSelected ? 3 : 1.5} />
-                  <title>{a.comment_text}</title>
+                  {/* Subtle pulsing background glow ring */}
+                  <circle r={14} fill={pinColor} opacity={0.25} />
+                  {/* Speech bubble pin shape with pointer tail */}
+                  <path
+                    d="M -11 -22 h 22 a 6 6 0 0 1 6 6 v 11 a 6 6 0 0 1 -6 6 h -13 l -6 6 v -6 a 6 6 0 0 1 -3 -5 v -12 a 6 6 0 0 1 6 -6 z"
+                    fill={pinColor}
+                    stroke={isLassoSelected ? '#38bdf8' : '#ffffff'}
+                    strokeWidth={isLassoSelected ? 2.5 : 1.5}
+                    style={{ filter: 'drop-shadow(0px 2px 4px rgba(0,0,0,0.35))' }}
+                  />
+                  {/* Icon detail inside pin: 3 speech bubble dots */}
+                  <circle cx="-5" cy="-12" r={1.5} fill="#ffffff" />
+                  <circle cx="0" cy="-12" r={1.5} fill="#ffffff" />
+                  <circle cx="5" cy="-12" r={1.5} fill="#ffffff" />
+                  <title>{a.comment_text ? `Comment: ${a.comment_text}` : 'Click to view comment'}</title>
                 </g>
               )
             }
@@ -1091,6 +2101,7 @@ function PdfPage({
         {pageNumber}
       </div>
     </div>
+  </div>
   )
 }
 

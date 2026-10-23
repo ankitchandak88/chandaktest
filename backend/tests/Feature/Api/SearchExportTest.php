@@ -49,6 +49,42 @@ test('search results never leak across tenants', function () {
     )->assertOk();
 });
 
+// Phase 7: highlights/comments are searchable too now, via the generated
+// `searchable_text` column (see the migration). Same FULLTEXT-under-a-
+// transaction limitation as the excerpt test above applies here - this
+// asserts the response shape and that it's reachable (200, not a crash on
+// the new `annotations` block), not that a freshly-inserted annotation is
+// actually matched within this test's own uncommitted transaction.
+test('search response includes an annotations block alongside document_pages/excerpts/notes', function () {
+    ['headers' => $headers, 'user' => $user] = registerUser();
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $headers)->json('data.id');
+    $project = Project::find($projectId);
+    $document = createReadyDocument($project, $user->id);
+
+    \App\Models\Annotation::create([
+        'document_id' => $document->id,
+        'project_id' => $project->id,
+        'created_by' => $user->id,
+        'page_number' => 1,
+        'type' => 'highlight',
+        'color' => '#facc15',
+        'payload' => ['rects' => [], 'text' => 'SearchableHighlightKeyword appears here'],
+    ]);
+
+    apiGet("/api/v1/search?project_id={$project->id}&q=SearchableHighlightKeyword", $headers)
+        ->assertOk()
+        ->assertJsonStructure(['data' => ['document_pages', 'excerpts', 'notes', 'annotations']]);
+});
+
+test('an outsider cannot search another organization\'s annotations either', function () {
+    ['headers' => $ownerHeaders, 'user' => $user] = registerUser('search-ann-owner@example.test');
+    ['headers' => $outsiderHeaders] = registerUser('search-ann-outsider@example.test');
+    $projectId = apiPost('/api/v1/projects', ['name' => 'P'], $ownerHeaders)->json('data.id');
+    $project = Project::find($projectId);
+
+    apiGet("/api/v1/search?project_id={$project->id}&q=anything", $outsiderHeaders)->assertStatus(403);
+});
+
 // BE-007 / REG-016
 test('search validation matches what MySQL FULLTEXT can actually index', function () {
     ['headers' => $headers] = registerUser();

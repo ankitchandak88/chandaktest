@@ -43,15 +43,17 @@ class OrganizationResource extends Resource
                 Tables\Columns\TextColumn::make('status')
                     ->badge()
                     ->color(fn (string $state) => $state === 'active' ? 'success' : 'danger'),
-                Tables\Columns\TextColumn::make('subscription.plan.name')->label('Plan')->default('Free'),
-                Tables\Columns\TextColumn::make('memberships_count')->counts('memberships')->label('Members'),
-                Tables\Columns\TextColumn::make('projects_count')->counts('projects')->label('Projects'),
+                Tables\Columns\TextColumn::make('subscription.plan.name')->label('Plan')->default('Solo Advocate (Free)'),
+                Tables\Columns\TextColumn::make('memberships_count')
+                    ->label('Advocate Seats')
+                    ->state(fn (Organization $record) => $record->memberships()->count().' / '.app(EntitlementService::class)->planFor($record)->limit('seats', 1)),
+                Tables\Columns\TextColumn::make('projects_count')->counts('projects')->label('Cases'),
                 Tables\Columns\TextColumn::make('storage_used')
-                    ->label('Storage used')
+                    ->label('Storage Quota')
                     ->state(fn (Organization $record) => number_format(
                         app(EntitlementService::class)->storageUsedBytes($record) / 1048576,
                         1
-                    ).' MB'),
+                    ).' / '.app(EntitlementService::class)->planFor($record)->limit('storage_mb', 1000).' MB'),
                 Tables\Columns\TextColumn::make('created_at')->dateTime()->sortable()
                     ->toggleable(isToggledHiddenByDefault: true),
             ])
@@ -61,6 +63,32 @@ class OrganizationResource extends Resource
             ])
             ->actions([
                 Tables\Actions\EditAction::make(),
+                Tables\Actions\Action::make('change_plan')
+                    ->label('Change Plan')
+                    ->icon('heroicon-o-arrow-up-circle')
+                    ->color('warning')
+                    ->form([
+                        Forms\Components\Select::make('plan_id')
+                            ->label('Select Advocate Plan')
+                            ->options(\App\Models\Plan::pluck('name', 'id'))
+                            ->required(),
+                    ])
+                    ->action(function (Organization $record, array $data) {
+                        $plan = \App\Models\Plan::findOrFail($data['plan_id']);
+                        $subscription = $record->subscription;
+                        if ($subscription) {
+                            $subscription->update(['plan_id' => $plan->id, 'status' => 'active']);
+                        } else {
+                            \App\Models\Subscription::create([
+                                'organization_id' => $record->id,
+                                'plan_id' => $plan->id,
+                                'provider' => 'manual',
+                                'provider_subscription_id' => 'admin_assigned_'.\Illuminate\Support\Str::random(8),
+                                'status' => 'active',
+                            ]);
+                        }
+                        Notification::make()->title("Firm upgraded to {$plan->name}")->success()->send();
+                    }),
                 Tables\Actions\Action::make('suspend')
                     ->visible(fn (Organization $record) => $record->status === 'active')
                     ->requiresConfirmation()

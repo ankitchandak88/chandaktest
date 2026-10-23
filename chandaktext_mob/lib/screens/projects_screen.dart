@@ -116,18 +116,29 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF8FAFC),
       appBar: AppBar(
-        title: const Text('Projects'),
+        title: const Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('Case Briefs & Vault', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 18)),
+            Text('Litigation Projects', style: TextStyle(fontSize: 11, color: Color(0xFF64748B))),
+          ],
+        ),
         actions: [
           IconButton(
-            icon: const Icon(Icons.logout),
+            tooltip: 'Logout',
+            icon: const Icon(Icons.logout, size: 20),
             onPressed: () => context.read<AuthProvider>().logout(),
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
+      floatingActionButton: FloatingActionButton.extended(
+        backgroundColor: const Color(0xFF1E3A8A),
+        foregroundColor: Colors.white,
         onPressed: _createProject,
-        child: const Icon(Icons.add),
+        icon: const Icon(Icons.add, size: 20),
+        label: const Text('New Case Brief', style: TextStyle(fontWeight: FontWeight.w600)),
       ),
       body: RefreshIndicator(
         onRefresh: _load,
@@ -136,36 +147,56 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
             : _error != null
                 ? Center(child: Text(apiErrorMessage(_error!)))
                 : ListView(
-                    padding: const EdgeInsets.all(16),
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                     children: [
                       if (_usage != null)
-                        Padding(
-                          padding: const EdgeInsets.only(bottom: 12),
-                          child: Text(
-                            '${_usage!.projectsUsed} / ${_usage!.projectsLimit} projects on the '
-                            '${_usage!.plan} plan',
-                            style: Theme.of(context).textTheme.bodySmall,
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 16),
+                          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFFEFF6FF),
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: const Color(0xFFBFDBFE)),
+                          ),
+                          child: Row(
+                            children: [
+                              const Icon(Icons.workspace_premium, size: 18, color: Color(0xFF1E3A8A)),
+                              const SizedBox(width: 8),
+                              Text(
+                                '${_usage!.plan.toUpperCase()} PLAN · ${_usage!.projectsUsed} of ${_usage!.projectsLimit} briefs active',
+                                style: const TextStyle(
+                                  color: Color(0xFF1E3A8A),
+                                  fontWeight: FontWeight.w700,
+                                  fontSize: 12,
+                                  letterSpacing: 0.3,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       if (_projects.isEmpty)
                         const Padding(
                           padding: EdgeInsets.only(top: 48),
-                          child: Center(child: Text('No projects yet. Tap + to create one.')),
+                          child: Center(child: Text('No case briefs yet. Tap + to create one.')),
                         ),
                       for (final project in _projects)
-                        Card(
-                          child: ListTile(
-                            title: Text(project.name),
-                            subtitle: Text(
-                              '${project.documentsCount} documents · ${project.excerptsCount} excerpts · '
-                              '${project.notesCount} notes',
-                            ),
-                            trailing: const Icon(Icons.chevron_right),
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0xFFE2E8F0)),
+                            boxShadow: [
+                              BoxShadow(
+                                color: const Color(0xFF0F172A).withValues(alpha: 0.03),
+                                blurRadius: 10,
+                                offset: const Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: InkWell(
+                            borderRadius: BorderRadius.circular(14),
                             onTap: () async {
-                              // Document/excerpt/note counts can change while
-                              // the user is inside the project (upload, add
-                              // note, etc.) - refresh this list on return
-                              // rather than showing stale counts indefinitely.
                               await Navigator.of(context).push(
                                 MaterialPageRoute(
                                   builder: (_) => ProjectDetailScreen(project: project),
@@ -173,6 +204,48 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                               );
                               if (mounted) _load();
                             },
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Container(
+                                        padding: const EdgeInsets.all(8),
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFF1E3A8A).withValues(alpha: 0.08),
+                                          borderRadius: BorderRadius.circular(10),
+                                        ),
+                                        child: const Icon(Icons.folder_outlined, color: Color(0xFF1E3A8A), size: 20),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Text(
+                                          project.name,
+                                          style: const TextStyle(
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w700,
+                                            color: Color(0xFF0F172A),
+                                          ),
+                                        ),
+                                      ),
+                                      const Icon(Icons.chevron_right, color: Color(0xFF94A3B8)),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 6,
+                                    children: [
+                                      _buildBadge(Icons.description_outlined, '${project.documentsCount} docs', const Color(0xFF0284C7)),
+                                      _buildBadge(Icons.format_quote_outlined, '${project.excerptsCount} excerpts', const Color(0xFFD97706)),
+                                      _buildBadge(Icons.edit_note_outlined, '${project.notesCount} notes', const Color(0xFF059669)),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
                           ),
                         ),
                       if (_meta?.hasMore ?? false)
@@ -189,6 +262,32 @@ class _ProjectsScreenState extends State<ProjectsScreen> {
                         ),
                     ],
                   ),
+      ),
+    );
+  }
+
+  Widget _buildBadge(IconData icon, String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.2)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 14, color: color),
+          const SizedBox(width: 4),
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
+            ),
+          ),
+        ],
       ),
     );
   }

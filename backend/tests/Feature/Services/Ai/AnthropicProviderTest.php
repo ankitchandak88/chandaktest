@@ -43,3 +43,25 @@ test('a failed response throws', function () {
 
     expect(fn () => $provider->chat('ctx', [], 'hi'))->toThrow(RuntimeException::class);
 });
+
+test('summarizeHighlights sends the highlights text as the user message', function () {
+    Http::fake(['api.anthropic.com/*' => Http::response([
+        'content' => [['type' => 'text', 'text' => 'Highlights summary.']],
+    ])]);
+
+    $provider = new AnthropicProvider('test-key', 'claude-haiku-4-5');
+
+    expect($provider->summarizeHighlights('highlight text'))->toBe('Highlights summary.');
+
+    Http::assertSent(fn ($request) => $request['messages'][0] === ['role' => 'user', 'content' => 'highlight text']);
+});
+
+test('suggestHighlights parses a JSON array response', function () {
+    Http::fake(['api.anthropic.com/*' => Http::response([
+        'content' => [['type' => 'text', 'text' => '["Passage one."]']],
+    ])]);
+
+    $provider = new AnthropicProvider('test-key', 'claude-haiku-4-5');
+
+    expect($provider->suggestHighlights('document text'))->toBe(['Passage one.']);
+});

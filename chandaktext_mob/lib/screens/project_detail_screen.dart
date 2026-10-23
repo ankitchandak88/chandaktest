@@ -20,7 +20,18 @@ class ProjectDetailScreen extends StatefulWidget {
   State<ProjectDetailScreen> createState() => _ProjectDetailScreenState();
 }
 
-class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
+class _ProjectDetailScreenState extends State<ProjectDetailScreen>
+    with SingleTickerProviderStateMixin {
+  // An explicit TabController rather than DefaultTabController: this
+  // State's own `context` is the PARENT of the DefaultTabController its
+  // build() method would create (an InheritedWidget lookup only searches
+  // ancestors, never a widget's own descendants), so
+  // `DefaultTabController.of(context)` from inside this State can never
+  // find it - confirmed live on a real device (the Workspace mode-switch
+  // button threw "DefaultTabController.of() was called with a context
+  // that does not contain a DefaultTabController widget" every time).
+  late final TabController _tabController;
+
   List<ReaderDocument> _documents = [];
   List<ResearchNote> _notes = [];
   List<Excerpt> _excerpts = [];
@@ -35,16 +46,78 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   String? _exportMessage;
   Timer? _pollTimer;
 
+  // Phase 7: project-wide search.
+  final _searchController = TextEditingController();
+  SearchResults? _searchResults;
+  bool _searching = false;
+  String? _searchError;
+  String? _searchOpenError;
+
   @override
   void initState() {
     super.initState();
+    _tabController = TabController(length: 5, vsync: this);
     _reload();
   }
 
   @override
   void dispose() {
     _pollTimer?.cancel();
+    _searchController.dispose();
+    _tabController.dispose();
     super.dispose();
+  }
+
+  Future<void> _runSearch() async {
+    final q = _searchController.text.trim();
+    if (q.isEmpty) return;
+    setState(() {
+      _searching = true;
+      _searchError = null;
+    });
+    try {
+      final results = await ProjectApi.search(widget.project.id, q);
+      if (!mounted) return;
+      setState(() {
+        _searchResults = results;
+        _searching = false;
+      });
+    } catch (err) {
+      if (!mounted) return;
+      setState(() {
+        _searchError = apiErrorMessage(err);
+        _searching = false;
+      });
+    }
+  }
+
+  Future<void> _openDocumentAtPage(String? documentId, int? pageNumber) async {
+    ReaderDocument? doc;
+    for (final d in _documents) {
+      if (d.id == documentId) {
+        doc = d;
+        break;
+      }
+    }
+    if (doc == null) {
+      setState(
+        () => _searchOpenError =
+            'Open this document from the Documents tab first.',
+      );
+      return;
+    }
+    final resolvedDoc = doc;
+    setState(() => _searchOpenError = null);
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => PdfReaderScreen(
+          document: resolvedDoc,
+          initialPage: pageNumber,
+          onSwitchToWorkspace: () => _tabController.animateTo(3),
+        ),
+      ),
+    );
+    if (mounted) _reload();
   }
 
   Future<void> _reload() async {
@@ -84,7 +157,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final meta = _documentsMeta;
     if (meta == null || !meta.hasMore || _loadingMoreDocuments) return;
     setState(() => _loadingMoreDocuments = true);
-    final result = await ProjectApi.listDocuments(widget.project.id, page: meta.currentPage + 1);
+    final result = await ProjectApi.listDocuments(
+      widget.project.id,
+      page: meta.currentPage + 1,
+    );
     if (!mounted) return;
     setState(() {
       _documents = [..._documents, ...result.data];
@@ -97,7 +173,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final meta = _excerptsMeta;
     if (meta == null || !meta.hasMore || _loadingMoreExcerpts) return;
     setState(() => _loadingMoreExcerpts = true);
-    final result = await ProjectApi.listExcerpts(widget.project.id, page: meta.currentPage + 1);
+    final result = await ProjectApi.listExcerpts(
+      widget.project.id,
+      page: meta.currentPage + 1,
+    );
     if (!mounted) return;
     setState(() {
       _excerpts = [..._excerpts, ...result.data];
@@ -110,7 +189,10 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     final meta = _notesMeta;
     if (meta == null || !meta.hasMore || _loadingMoreNotes) return;
     setState(() => _loadingMoreNotes = true);
-    final result = await ProjectApi.listNotes(widget.project.id, page: meta.currentPage + 1);
+    final result = await ProjectApi.listNotes(
+      widget.project.id,
+      page: meta.currentPage + 1,
+    );
     if (!mounted) return;
     setState(() {
       _notes = [..._notes, ...result.data];
@@ -133,7 +215,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       await _reload();
     } catch (err) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(apiErrorMessage(err))));
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text(apiErrorMessage(err))));
     } finally {
       if (mounted) setState(() => _uploading = false);
     }
@@ -144,7 +228,12 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
     // Excerpts tab here needs those on return, same reasoning as the
     // projects list refreshing after a project visit.
     await Navigator.of(context).push(
-      MaterialPageRoute(builder: (_) => PdfReaderScreen(document: doc)),
+      MaterialPageRoute(
+        builder: (_) => PdfReaderScreen(
+          document: doc,
+          onSwitchToWorkspace: () => _tabController.animateTo(3),
+        ),
+      ),
     );
     if (mounted) _reload();
   }
@@ -155,9 +244,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       context: context,
       builder: (context) => AlertDialog(
         title: const Text('New note'),
-        content: TextField(controller: controller, maxLines: 4, autofocus: true),
+        content: TextField(
+          controller: controller,
+          maxLines: 4,
+          autofocus: true,
+        ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context), child: const Text('Cancel')),
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
             onPressed: () => Navigator.pop(context, controller.text.trim()),
             child: const Text('Add'),
@@ -181,7 +277,12 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
   Future<void> _placeOnCanvas(String itemType, String targetId) async {
     final offset = (DateTime.now().millisecondsSinceEpoch % 10) * 24.0;
     await ProjectApi.saveWorkspaceBatch(widget.project.id, [
-      {'item_type': itemType, 'target_id': targetId, 'x': 40.0 + offset, 'y': 40.0 + offset},
+      {
+        'item_type': itemType,
+        'target_id': targetId,
+        'x': 40.0 + offset,
+        'y': 40.0 + offset,
+      },
     ]);
   }
 
@@ -200,11 +301,16 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
       await Future.delayed(const Duration(seconds: 1));
       final job = await ProjectApi.exportStatus(exportId);
       if (job['status'] == 'ready') {
-        setState(() => _exportMessage = 'Export ready (download from the web app for now).');
+        setState(
+          () => _exportMessage =
+              'Export ready (download from the web app for now).',
+        );
         return;
       }
       if (job['status'] == 'failed') {
-        setState(() => _exportMessage = 'Export failed: ${job['failure_reason']}');
+        setState(
+          () => _exportMessage = 'Export failed: ${job['failure_reason']}',
+        );
         return;
       }
     }
@@ -212,64 +318,66 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
   @override
   Widget build(BuildContext context) {
-    return DefaultTabController(
-      length: 4,
-      child: Scaffold(
-        appBar: AppBar(
-          title: Text(widget.project.name),
-          bottom: const TabBar(
-            tabs: [
-              Tab(text: 'Documents'),
-              Tab(text: 'Excerpts'),
-              Tab(text: 'Notes'),
-              Tab(text: 'Canvas'),
-            ],
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(widget.project.name),
+        bottom: TabBar(
+          controller: _tabController,
+          isScrollable: true,
+          tabs: const [
+            Tab(text: 'Documents'),
+            Tab(text: 'Excerpts'),
+            Tab(text: 'Notes'),
+            Tab(text: 'Canvas'),
+            Tab(text: 'Search'),
+          ],
+        ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.link),
+            tooltip: 'Share links',
+            onPressed: () => showModalBottomSheet(
+              context: context,
+              isScrollControlled: true,
+              builder: (_) => ShareManager(projectId: widget.project.id),
+            ),
           ),
-          actions: [
-            IconButton(
-              icon: const Icon(Icons.link),
-              tooltip: 'Share links',
-              onPressed: () => showModalBottomSheet(
-                context: context,
-                isScrollControlled: true,
-                builder: (_) => ShareManager(projectId: widget.project.id),
-              ),
+          IconButton(
+            icon: const Icon(Icons.ios_share),
+            tooltip: 'Export',
+            onPressed: _startExport,
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          if (_exportMessage != null)
+            Container(
+              width: double.infinity,
+              color: Colors.cyan.withValues(alpha: 0.1),
+              padding: const EdgeInsets.all(8),
+              child: Text(_exportMessage!, textAlign: TextAlign.center),
             ),
-            IconButton(
-              icon: const Icon(Icons.ios_share),
-              tooltip: 'Export',
-              onPressed: _startExport,
-            ),
-          ],
-        ),
-        body: Column(
-          children: [
-            if (_exportMessage != null)
-              Container(
-                width: double.infinity,
-                color: Colors.cyan.withValues(alpha: 0.1),
-                padding: const EdgeInsets.all(8),
-                child: Text(_exportMessage!, textAlign: TextAlign.center),
-              ),
-            Expanded(
-              child: _loading
-                  ? const Center(child: CircularProgressIndicator())
-                  : TabBarView(
-                      children: [
-                        _buildDocumentsTab(),
-                        _buildExcerptsTab(),
-                        _buildNotesTab(),
-                        ProjectCanvas(
-                          projectId: widget.project.id,
-                          excerpts: _excerpts,
-                          notes: _notes,
-                          onTagsChanged: _reload,
-                        ),
-                      ],
-                    ),
-            ),
-          ],
-        ),
+          Expanded(
+            child: _loading
+                ? const Center(child: CircularProgressIndicator())
+                : TabBarView(
+                    controller: _tabController,
+                    children: [
+                      _buildDocumentsTab(),
+                      _buildExcerptsTab(),
+                      _buildNotesTab(),
+                      ProjectCanvas(
+                        projectId: widget.project.id,
+                        excerpts: _excerpts,
+                        notes: _notes,
+                        onTagsChanged: _reload,
+                      ),
+                      _buildSearchTab(),
+                    ],
+                  ),
+          ),
+        ],
       ),
     );
   }
@@ -305,25 +413,32 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
               if (_documents.isEmpty)
                 const Padding(
                   padding: EdgeInsets.only(top: 48),
-                  child: Center(child: Text('No documents yet. Upload a PDF below.')),
+                  child: Center(
+                    child: Text('No documents yet. Upload a PDF below.'),
+                  ),
                 ),
               for (final doc in _documents)
                 Card(
                   child: InkWell(
-                    onTap: doc.status == 'ready' ? () => _openDocument(doc) : null,
+                    onTap: doc.status == 'ready'
+                        ? () => _openDocument(doc)
+                        : null,
                     child: Padding(
                       padding: const EdgeInsets.all(16),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(doc.originalFilename, overflow: TextOverflow.ellipsis),
+                          Text(
+                            doc.originalFilename,
+                            overflow: TextOverflow.ellipsis,
+                          ),
                           const SizedBox(height: 4),
                           Text(
                             doc.status == 'ready'
                                 ? '${doc.pageCount ?? '?'} pages'
                                 : doc.status == 'failed'
-                                    ? 'Failed: ${doc.failureReason}'
-                                    : 'Processing…',
+                                ? 'Failed: ${doc.failureReason}'
+                                : 'Processing…',
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                           if (doc.status == 'ready') ...[
@@ -332,7 +447,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                               document: doc,
                               onUpdated: (updated) {
                                 setState(() {
-                                  final idx = _documents.indexWhere((d) => d.id == updated.id);
+                                  final idx = _documents.indexWhere(
+                                    (d) => d.id == updated.id,
+                                  );
                                   if (idx != -1) _documents[idx] = updated;
                                 });
                               },
@@ -342,8 +459,14 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                               document: doc,
                               onSummaryUpdated: (summary) {
                                 setState(() {
-                                  final idx = _documents.indexWhere((d) => d.id == doc.id);
-                                  if (idx != -1) _documents[idx] = doc.copyWith(aiSummary: summary);
+                                  final idx = _documents.indexWhere(
+                                    (d) => d.id == doc.id,
+                                  );
+                                  if (idx != -1) {
+                                    _documents[idx] = doc.copyWith(
+                                      aiSummary: summary,
+                                    );
+                                  }
                                 });
                               },
                             ),
@@ -383,7 +506,9 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
 
   Widget _buildExcerptsTab() {
     if (_excerpts.isEmpty) {
-      return const Center(child: Text('No excerpts yet. Select text in a document to save one.'));
+      return const Center(
+        child: Text('No excerpts yet. Select text in a document to save one.'),
+      );
     }
     return RefreshIndicator(
       onRefresh: _reload,
@@ -393,7 +518,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
           for (final excerpt in _excerpts)
             Card(
               child: ListTile(
-                title: Text(excerpt.text, maxLines: 3, overflow: TextOverflow.ellipsis),
+                title: Text(
+                  excerpt.text,
+                  maxLines: 3,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 subtitle: Text('Page ${excerpt.pageNumber}'),
               ),
             ),
@@ -425,7 +554,11 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
                 Card(
                   child: ListTile(
                     title: Text(note.title ?? 'Note'),
-                    subtitle: Text(note.content ?? '', maxLines: 3, overflow: TextOverflow.ellipsis),
+                    subtitle: Text(
+                      note.content ?? '',
+                      maxLines: 3,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
                 ),
               _loadMoreButton(
@@ -440,9 +573,138 @@ class _ProjectDetailScreenState extends State<ProjectDetailScreen> {
         Positioned(
           right: 16,
           bottom: 16,
-          child: FloatingActionButton(onPressed: _addNote, child: const Icon(Icons.add)),
+          child: FloatingActionButton(
+            onPressed: _addNote,
+            child: const Icon(Icons.add),
+          ),
         ),
       ],
     );
+  }
+
+  Widget _buildSearchTab() {
+    final results = _searchResults;
+
+    return Padding(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _searchController,
+                  decoration: const InputDecoration(
+                    hintText:
+                        'Search document text, excerpts, notes, highlights…',
+                    border: OutlineInputBorder(),
+                  ),
+                  onSubmitted: (_) => _runSearch(),
+                ),
+              ),
+              const SizedBox(width: 8),
+              FilledButton(
+                onPressed: _searching ? null : _runSearch,
+                child: _searching
+                    ? const SizedBox(
+                        height: 16,
+                        width: 16,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Text('Search'),
+              ),
+            ],
+          ),
+          if (_searchError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _searchError!,
+                style: const TextStyle(color: Colors.redAccent),
+              ),
+            ),
+          if (_searchOpenError != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Text(
+                _searchOpenError!,
+                style: const TextStyle(color: Colors.amber),
+              ),
+            ),
+          if (results != null)
+            Expanded(
+              child: ListView(
+                padding: const EdgeInsets.only(top: 12),
+                children: [
+                  ..._searchResultSection(
+                    'Document pages',
+                    results.documentPages,
+                    (r) =>
+                        '${r.documentName ?? 'Document'} · page ${r.pageNumber}',
+                    (r) => null,
+                    (r) => _openDocumentAtPage(r.documentId, r.pageNumber),
+                  ),
+                  ..._searchResultSection(
+                    'Excerpts',
+                    results.excerpts,
+                    (r) => 'Page ${r.pageNumber}',
+                    (r) => r.snippet,
+                    (r) => _openDocumentAtPage(r.documentId, r.pageNumber),
+                  ),
+                  ..._searchResultSection(
+                    'Highlights & comments',
+                    results.annotations,
+                    (r) => '${r.annotationType} · page ${r.pageNumber}',
+                    (r) => r.snippet,
+                    (r) => _openDocumentAtPage(r.documentId, r.pageNumber),
+                  ),
+                  ..._searchResultSection(
+                    'Notes',
+                    results.notes,
+                    (r) => r.title ?? 'Untitled note',
+                    (r) => r.snippet,
+                    (r) => _tabController.animateTo(3),
+                  ),
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _searchResultSection(
+    String title,
+    List<SearchResult> items,
+    String Function(SearchResult) meta,
+    String? Function(SearchResult) snippet,
+    void Function(SearchResult) onTap,
+  ) {
+    if (items.isEmpty) return [];
+
+    return [
+      Padding(
+        padding: const EdgeInsets.only(top: 8, bottom: 4),
+        child: Text(
+          title.toUpperCase(),
+          style: Theme.of(context).textTheme.labelSmall,
+        ),
+      ),
+      for (final r in items)
+        Card(
+          child: ListTile(
+            title: Text(meta(r)),
+            subtitle: snippet(r) != null
+                ? Text(
+                    snippet(r)!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  )
+                : null,
+            onTap: () => onTap(r),
+          ),
+        ),
+    ];
   }
 }

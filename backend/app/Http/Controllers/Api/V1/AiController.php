@@ -61,4 +61,22 @@ class AiController extends Controller
 
         return response()->json(['data' => ['suggestions' => $suggestions]]);
     }
+
+    public function summarizeHighlights(Request $request, Document $document)
+    {
+        $this->authorize('view', $document);
+
+        $summary = $this->assistant->summarizeHighlights($document);
+
+        return response()->json(['data' => ['summary' => $summary]]);
+    }
+
+    public function suggestHighlights(Request $request, Document $document)
+    {
+        $this->authorize('view', $document);
+
+        $suggestions = $this->assistant->suggestHighlights($document);
+
+        return response()->json(['data' => ['suggestions' => $suggestions]]);
+    }
 }

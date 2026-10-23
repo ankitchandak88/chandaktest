@@ -15,7 +15,7 @@ class ApiClient {
       BaseOptions(
         baseUrl: const String.fromEnvironment(
           'API_URL',
-          defaultValue: 'http://10.0.2.2:8123/api/v1',
+          defaultValue: 'https://chandaktest.chandakinfotech.com/api/v1',
         ),
         headers: {'Accept': 'application/json'},
       ),

@@ -75,4 +75,55 @@ class FakeAiProvider implements AiProvider
             "I have {$contextLength} characters of context and ".count($history).' prior message(s), '.
             'but this driver only returns canned text.';
     }
+
+    public function summarizeHighlights(string $highlightsText): string
+    {
+        $plain = trim(preg_replace('/\s+/', ' ', strip_tags($highlightsText)) ?? '');
+
+        if ($plain === '') {
+            return '(No highlights yet to summarize.)';
+        }
+
+        return '[Fake AI summary - configure AI_PROVIDER for a real one] '.Str::words($plain, 60, '…');
+    }
+
+    public function suggestHighlights(string $documentText): array
+    {
+        // Same frequent-word heuristic as suggestTags, but returns whole
+        // sentences containing a frequent word rather than the word itself
+        // - suggestHighlights must return verbatim excerpts of the source
+        // text, not invented summaries.
+        $plain = trim(preg_replace('/\s+/', ' ', strip_tags($documentText)) ?? '');
+        if ($plain === '') {
+            return [];
+        }
+
+        $sentences = preg_split('/(?<=[.!?])\s+/', $plain, -1, PREG_SPLIT_NO_EMPTY) ?: [];
+        $words = str_word_count(strtolower($plain), 1);
+        $counts = [];
+        foreach ($words as $word) {
+            if (strlen($word) < 5 || in_array($word, self::STOPWORDS, true)) {
+                continue;
+            }
+            $counts[$word] = ($counts[$word] ?? 0) + 1;
+        }
+        arsort($counts);
+        $topWords = array_slice(array_keys($counts), 0, 5);
+
+        $suggestions = [];
+        foreach ($sentences as $sentence) {
+            $sentenceLower = strtolower($sentence);
+            foreach ($topWords as $word) {
+                if (str_contains($sentenceLower, $word)) {
+                    $suggestions[] = trim($sentence);
+                    break;
+                }
+            }
+            if (count($suggestions) >= 5) {
+                break;
+            }
+        }
+
+        return array_values(array_unique($suggestions));
+    }
 }

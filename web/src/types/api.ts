@@ -108,9 +108,9 @@ export interface WorkspaceItem {
 export interface Link {
   id: string
   project_id: string
-  source_type: 'excerpt' | 'note'
+  source_type: 'excerpt' | 'note' | 'document'
   source_id: string
-  target_type: 'excerpt' | 'note'
+  target_type: 'excerpt' | 'note' | 'document'
   target_id: string
   label: string | null
 }
@@ -127,6 +127,47 @@ export interface Annotation {
   payload: Record<string, unknown>
 }
 
+// Phase 7: shapes mirror SearchController's response exactly - each result
+// type carries only what that result needs to jump to it (document_id +
+// page_number for anything document-anchored, nothing extra for a note).
+export interface SearchResultDocumentPage {
+  type: 'document_page'
+  document_id: string
+  document_name: string | null
+  page_number: number
+}
+
+export interface SearchResultExcerpt {
+  type: 'excerpt'
+  id: string
+  document_id: string
+  page_number: number
+  snippet: string
+}
+
+export interface SearchResultNote {
+  type: 'note'
+  id: string
+  title: string | null
+  snippet: string
+}
+
+export interface SearchResultAnnotation {
+  type: 'annotation'
+  id: string
+  annotation_type: 'highlight' | 'underline' | 'comment' | 'ink'
+  document_id: string
+  page_number: number
+  snippet: string
+}
+
+export interface SearchResults {
+  document_pages: SearchResultDocumentPage[]
+  excerpts: SearchResultExcerpt[]
+  notes: SearchResultNote[]
+  annotations: SearchResultAnnotation[]
+}
+
 export interface ExportJob {
   id: string
   project_id: string
@@ -140,15 +181,44 @@ export interface Plan {
   id: string
   code: string
   name: string
-  limits: { projects: number; storage_mb: number; documents_per_project: number }
+  limits: { projects: number; storage_mb: number; documents_per_project: number; seats?: number }
+  features?: Record<string, string>
   price_inr_paise: number
 }
 
 export interface UsageSummary {
   plan: string
+  plan_name?: string
+  members?: { used: number; limit: number }
   projects: { used: number; limit: number }
   storage_bytes: { used: number; limit: number }
   documents_per_project_limit: number
+}
+
+export interface OrganizationMember {
+  id: string
+  organization_id: string
+  user_id: number
+  role: string
+  user: {
+    id: number
+    name: string
+    email: string
+  }
+  created_at: string
+}
+
+export interface OrganizationDetails {
+  id: string
+  name: string
+  slug: string
+  status: 'active' | 'suspended'
+  subscription?: {
+    id: string
+    status: string
+    plan: Plan
+    current_period_end?: string
+  }
 }
 
 // BUG-006 follow-up: the paginated endpoints (Project/Document/Excerpt/
