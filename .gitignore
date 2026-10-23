@@ -37,6 +37,13 @@ Thumbs.db
 .idea/
 .vscode/
 dist/
+# Non-production folders & documentation
+chandaktext_mob/
+deploy/
+docs/
+CLAUDE*
+Research*
+*.docx
 scratch/
 *.log
 *.tmp
