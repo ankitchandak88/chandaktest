@@ -5,6 +5,7 @@ import {
   useCreateLink,
   useCreateNote,
   useCreateTag,
+  useDeleteDocument,
   useDeleteTag,
   useDocuments,
   useExcerpts,
@@ -197,6 +198,25 @@ export default function ProjectWorkspacePage() {
   }, [projectId, project?.name, documents, excerpts, notes, tags])
 
   const uploadDocument = useUploadDocument(projectId)
+  const deleteDocument = useDeleteDocument(projectId)
+
+  async function handleDeleteDocument(docId: string, filename: string) {
+    if (!window.confirm(`Are you sure you want to delete "${filename}"?`)) {
+      return
+    }
+    try {
+      await deleteDocument.mutateAsync(docId)
+      if (activeDocument?.id === docId) {
+        setActiveDocument(null)
+      }
+      if (secondaryDocument?.id === docId) {
+        setSecondaryDocument(null)
+      }
+    } catch (err) {
+      alert(apiErrorMessage(err, 'Could not delete the document.'))
+    }
+  }
+
   const createExcerpt = useCreateExcerpt(projectId)
   const createNote = useCreateNote(projectId)
   const saveBatch = useSaveWorkspaceBatch(projectId)
@@ -1323,19 +1343,31 @@ export default function ProjectWorkspacePage() {
 
                       {/* Card Action Footer */}
                       <div className="mt-5 pt-3.5 border-t border-slate-100 flex flex-col gap-2.5">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (!isReady) return
-                            setActiveDocument(doc)
-                            setFocusPage(undefined)
-                          }}
-                          disabled={!isReady}
-                          className="flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-4 text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
-                        >
-                          <span>Open in Reader</span>
-                          <span>➔</span>
-                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!isReady) return
+                              setActiveDocument(doc)
+                              setFocusPage(undefined)
+                            }}
+                            disabled={!isReady}
+                            className="flex-1 flex items-center justify-center gap-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white py-2.5 px-4 text-xs font-bold transition-all shadow-xs disabled:opacity-50 cursor-pointer"
+                          >
+                            <span>Open in Reader</span>
+                            <span>➔</span>
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteDocument(doc.id, doc.original_filename)}
+                            disabled={deleteDocument.isPending}
+                            className="flex items-center justify-center rounded-xl border border-rose-200 bg-rose-50 hover:bg-rose-100 p-2.5 text-rose-600 hover:text-rose-700 transition-colors cursor-pointer shrink-0"
+                            title="Delete this PDF brief"
+                          >
+                            🗑️
+                          </button>
+                        </div>
 
                         {isReady && (
                           <div className="flex items-center gap-2 pt-1">
@@ -1467,12 +1499,39 @@ export default function ProjectWorkspacePage() {
                     </div>
                   </div>
                 ) : (
-                  <PdfViewer
-                    documentId={activeDocument.id}
-                    onSaveExcerpt={handleSaveExcerpt}
-                    initialPage={focusPage}
-                    onSwitchToWorkspace={() => setLayoutMode('split')}
-                  />
+                  <div className="flex flex-1 flex-col overflow-hidden">
+                    <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-slate-300">
+                      <span className="truncate max-w-md font-semibold text-slate-200">
+                        📄 {activeDocument.original_filename}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteDocument(activeDocument.id, activeDocument.original_filename)}
+                          className="flex items-center gap-1 rounded bg-rose-950/40 border border-rose-700/50 px-2 py-0.5 text-xs font-semibold text-rose-300 hover:bg-rose-900/60 transition-colors cursor-pointer"
+                          title="Delete this PDF brief"
+                        >
+                          🗑️ Delete PDF
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setActiveDocument(null)}
+                          className="rounded bg-slate-800 px-2.5 py-0.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
+                          title="Close reader and return to documents"
+                        >
+                          ✕ Close Reader
+                        </button>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-hidden">
+                      <PdfViewer
+                        documentId={activeDocument.id}
+                        onSaveExcerpt={handleSaveExcerpt}
+                        initialPage={focusPage}
+                        onSwitchToWorkspace={() => setLayoutMode('split')}
+                      />
+                    </div>
+                  </div>
                 )}
               </div>
 

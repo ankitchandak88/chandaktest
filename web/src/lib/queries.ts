@@ -127,6 +127,20 @@ export function useUpdateDocumentCitation(projectId: string | undefined) {
   })
 }
 
+export function useDeleteDocument(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (documentId: string) =>
+      (await api.delete<{ data: { message: string } }>(`/documents/${documentId}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'documents'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['usage'] })
+    },
+  })
+}
+
 export function useExcerpts(projectId: string | undefined) {
   return useInfiniteQuery({
     queryKey: ['projects', projectId, 'excerpts'],
