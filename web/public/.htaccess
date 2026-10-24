@@ -1,0 +1,40 @@
+DirectoryIndex index.html index.php
+PassengerEnabled off
+
+# Serve .js and .mjs files with proper javascript MIME type for Web Workers
+<IfModule mod_mime.c>
+    AddType application/javascript .js .mjs
+</IfModule>
+
+<IfModule mod_headers.c>
+    # Never cache the SPA HTML entrypoint
+    <FilesMatch "\.(html|htm)$">
+        Header set Cache-Control "no-cache, no-store, must-revalidate"
+        Header set Pragma "no-cache"
+        Header set Expires 0
+    </FilesMatch>
+</IfModule>
+
+<IfModule mod_rewrite.c>
+    <IfModule mod_negotiation.c>
+        Options -MultiViews -Indexes
+    </IfModule>
+
+    RewriteEngine On
+
+    # Handle Authorization Header
+    RewriteCond %{HTTP:Authorization} .
+    RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+    # 1. Route API, Sanctum, Admin, Livewire, Storage directly to Laravel index.php
+    RewriteCond %{REQUEST_URI} ^/(api|sanctum|admin|livewire|storage)/? [NC]
+    RewriteRule ^ index.php [L]
+
+    # 2. Existing static files
+    RewriteCond %{REQUEST_FILENAME} -f [OR]
+    RewriteCond %{REQUEST_FILENAME} -d
+    RewriteRule ^ - [L]
+
+    # 3. All other routes to React SPA
+    RewriteRule ^ index.html [L]
+</IfModule>
