@@ -144,7 +144,30 @@ export function useDeleteDocument(projectId: string | undefined) {
   return useMutation({
     mutationFn: async (documentId: string) =>
       (await api.delete<{ data: { message: string } }>(`/documents/${documentId}`)).data,
-    onSuccess: () => {
+    onMutate: async (documentId: string) => {
+      await queryClient.cancelQueries({ queryKey: ['projects', projectId, 'documents'] })
+
+      const previousData = queryClient.getQueryData(['projects', projectId, 'documents'])
+
+      queryClient.setQueryData(['projects', projectId, 'documents'], (old: any) => {
+        if (!old || !old.pages) return old
+        return {
+          ...old,
+          pages: old.pages.map((page: any) => ({
+            ...page,
+            data: page.data.filter((doc: any) => doc.id !== documentId),
+          })),
+        }
+      })
+
+      return { previousData }
+    },
+    onError: (_err, _documentId, context) => {
+      if (context?.previousData) {
+        queryClient.setQueryData(['projects', projectId, 'documents'], context.previousData)
+      }
+    },
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'documents'] })
       queryClient.invalidateQueries({ queryKey: ['projects', projectId] })
       queryClient.invalidateQueries({ queryKey: ['usage'] })

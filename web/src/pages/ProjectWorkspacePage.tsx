@@ -66,6 +66,7 @@ export default function ProjectWorkspacePage() {
   const [showChambersModal, setShowChambersModal] = useState<boolean>(false)
   const [showPlansModal, setShowPlansModal] = useState<boolean>(false)
   const [showShredModal, setShowShredModal] = useState<boolean>(false)
+  const [documentToDelete, setDocumentToDelete] = useState<{ id: string; name: string } | null>(null)
   const [isOffline, setIsOffline] = useState<boolean>(
     typeof navigator !== 'undefined' ? !navigator.onLine : false
   )
@@ -211,21 +212,8 @@ export default function ProjectWorkspacePage() {
   const uploadDocument = useUploadDocument(projectId)
   const deleteDocument = useDeleteDocument(projectId)
 
-  async function handleDeleteDocument(docId: string, filename: string) {
-    if (!window.confirm(`Are you sure you want to delete "${filename}"?`)) {
-      return
-    }
-    try {
-      await deleteDocument.mutateAsync(docId)
-      if (activeDocument?.id === docId) {
-        setActiveDocument(null)
-      }
-      if (secondaryDocument?.id === docId) {
-        setSecondaryDocument(null)
-      }
-    } catch (err) {
-      alert(apiErrorMessage(err, 'Could not delete the document.'))
-    }
+  function handleDeleteDocument(docId: string, filename: string) {
+    setDocumentToDelete({ id: docId, name: filename })
   }
 
   const createExcerpt = useCreateExcerpt(projectId)
@@ -2274,6 +2262,73 @@ export default function ProjectWorkspacePage() {
         projectId={projectId!}
         projectName={project?.name}
       />
+
+      {/* Document Delete Confirmation In-App Modal */}
+      {documentToDelete && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs">
+          <div className="w-full max-w-md rounded-3xl bg-white p-6 shadow-2xl border border-slate-100 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-rose-100 text-rose-600 text-2xl shrink-0">
+                🗑️
+              </div>
+              <div>
+                <h3 className="text-base font-black text-slate-950">Delete Court Brief?</h3>
+                <p className="text-xs text-slate-500 font-semibold">Remove this document from matter</p>
+              </div>
+            </div>
+
+            <div className="rounded-2xl bg-slate-50 border border-slate-200/80 p-3.5 mb-5">
+              <p className="text-xs font-bold text-slate-900 break-all leading-snug">
+                📄 {documentToDelete.name}
+              </p>
+              <p className="text-[11px] text-slate-500 mt-1">
+                This document will be deleted from your workspace and will no longer appear in the dossier.
+              </p>
+            </div>
+
+            <div className="flex items-center justify-end gap-3">
+              <button
+                type="button"
+                onClick={() => setDocumentToDelete(null)}
+                disabled={deleteDocument.isPending}
+                className="rounded-xl px-4 py-2.5 text-xs font-bold text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+
+              <button
+                type="button"
+                onClick={async () => {
+                  const targetId = documentToDelete.id
+                  try {
+                    await deleteDocument.mutateAsync(targetId)
+                    if (activeDocument?.id === targetId) {
+                      setActiveDocument(null)
+                    }
+                    if (secondaryDocument?.id === targetId) {
+                      setSecondaryDocument(null)
+                    }
+                    setDocumentToDelete(null)
+                  } catch (err) {
+                    alert(apiErrorMessage(err, 'Could not delete the document.'))
+                  }
+                }}
+                disabled={deleteDocument.isPending}
+                className="flex items-center gap-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white px-5 py-2.5 text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {deleteDocument.isPending ? (
+                  <>
+                    <span className="h-3 w-3 border-2 border-white/40 border-t-white rounded-full animate-spin" />
+                    <span>Deleting Brief…</span>
+                  </>
+                ) : (
+                  <span>Yes, Delete Document</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Courtroom Hearing Dais Mode (Full Screen Argument Dais) */}
       {hearingMode && (
