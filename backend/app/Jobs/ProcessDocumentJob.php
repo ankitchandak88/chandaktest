@@ -46,11 +46,21 @@ class ProcessDocumentJob implements ShouldQueue
             $pdf = $parser->parseFile($absolutePath);
             $pages = $pdf->getPages();
 
+            $now = now();
+            $records = [];
             foreach ($pages as $index => $page) {
-                DocumentPage::updateOrCreate(
-                    ['document_id' => $document->id, 'page_number' => $index + 1],
-                    ['text' => $page->getText()]
-                );
+                $records[] = [
+                    'id' => (string) \Illuminate\Support\Str::uuid(),
+                    'document_id' => $document->id,
+                    'page_number' => $index + 1,
+                    'text' => $page->getText(),
+                    'created_at' => $now,
+                    'updated_at' => $now,
+                ];
+            }
+
+            foreach (array_chunk($records, 50) as $chunk) {
+                DocumentPage::upsert($chunk, ['document_id', 'page_number'], ['text', 'updated_at']);
             }
 
             $document->forceFill([

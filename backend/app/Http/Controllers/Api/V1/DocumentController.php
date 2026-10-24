@@ -87,7 +87,7 @@ class DocumentController extends Controller
             }
         );
 
-        ProcessDocumentJob::dispatch($document->id);
+        ProcessDocumentJob::dispatch($document->id)->afterResponse();
 
         $this->auditLogger->logRequest($request, 'document.uploaded', 'document', $document->id);
 

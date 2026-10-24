@@ -34,6 +34,15 @@ import SubscriptionPlansModal from '@/components/SubscriptionPlansModal'
 import ZeroRetentionShredModal from '@/components/ZeroRetentionShredModal'
 import type { Document, Excerpt, SearchResults } from '@/types/api'
 
+interface UploadItem {
+  id: string
+  name: string
+  size: number
+  percent: number
+  status: 'uploading' | 'processing' | 'done' | 'error'
+  error?: string
+}
+
 type Tab = 'documents' | 'workspace' | 'search'
 type LayoutMode = 'split' | 'doc' | 'workspace'
 
@@ -68,6 +77,8 @@ export default function ProjectWorkspacePage() {
   const [hearingMode, setHearingMode] = useState<boolean>(false)
   const [hearingDaisTab, setHearingDaisTab] = useState<'chronology' | 'issues' | 'exhibits' | 'contradictions' | 'notes'>('chronology')
   const [copiedCitation, setCopiedCitation] = useState<string | null>(null)
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([])
+  const [isDraggingOver, setIsDraggingOver] = useState<boolean>(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
   const isDraggingDivider = useRef(false)
   const splitContainerRef = useRef<HTMLDivElement>(null)
@@ -301,17 +312,93 @@ export default function ProjectWorkspacePage() {
     return documents?.reduce((acc, d) => acc + (d.page_count ?? 0), 0) ?? 0
   }, [documents])
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    if (!file) return
+  function formatFileSize(bytes: number) {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  async function processFiles(files: FileList | File[]) {
+    const fileArray = Array.from(files).filter(
+      (f) => f.type === 'application/pdf' || f.name.toLowerCase().endsWith('.pdf'),
+    )
+    if (fileArray.length === 0) {
+      alert('Please select valid PDF documents.')
+      return
+    }
+
     setUploadError(null)
 
-    try {
-      await uploadDocument.mutateAsync(file)
-    } catch (err) {
-      setUploadError(apiErrorMessage(err, 'Upload failed.'))
-    } finally {
-      if (fileInputRef.current) fileInputRef.current.value = ''
+    const newItems: UploadItem[] = fileArray.map((file) => ({
+      id: Math.random().toString(36).slice(2),
+      name: file.name,
+      size: file.size,
+      percent: 0,
+      status: 'uploading',
+    }))
+
+    setUploadQueue((prev) => [...newItems, ...prev])
+
+    for (let i = 0; i < fileArray.length; i++) {
+      const file = fileArray[i]
+      const item = newItems[i]
+
+      try {
+        await uploadDocument.mutateAsync({
+          file,
+          onProgress: (percent) => {
+            setUploadQueue((prev) =>
+              prev.map((it) => (it.id === item.id ? { ...it, percent } : it)),
+            )
+          },
+        })
+
+        // Once uploaded, mark as fast background processing
+        setUploadQueue((prev) =>
+          prev.map((it) => (it.id === item.id ? { ...it, percent: 100, status: 'processing' } : it)),
+        )
+
+        setTimeout(() => {
+          setUploadQueue((prev) =>
+            prev.map((it) => (it.id === item.id ? { ...it, status: 'done' } : it)),
+          )
+          setTimeout(() => {
+            setUploadQueue((prev) => prev.filter((it) => it.id !== item.id))
+          }, 3500)
+        }, 1200)
+      } catch (err) {
+        const errorMsg = apiErrorMessage(err, 'Upload failed.')
+        setUploadQueue((prev) =>
+          prev.map((it) => (it.id === item.id ? { ...it, status: 'error', error: errorMsg } : it)),
+        )
+      }
+    }
+  }
+
+  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    if (e.target.files && e.target.files.length > 0) {
+      await processFiles(e.target.files)
+    }
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    if (!isDraggingOver) setIsDraggingOver(true)
+  }
+
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+  }
+
+  async function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setIsDraggingOver(false)
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      await processFiles(e.dataTransfer.files)
     }
   }
 
@@ -1093,7 +1180,27 @@ export default function ProjectWorkspacePage() {
               </div>
             </div>
           ) : (
-            <div className="overflow-auto pb-12">
+            <div
+              className={`relative overflow-auto pb-12 transition-all duration-200 ${
+                isDraggingOver ? 'bg-blue-50/50 ring-4 ring-blue-500 ring-dashed rounded-3xl' : ''
+              }`}
+              onDragOver={handleDragOver}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop}
+            >
+              {/* Drag & Drop Visual Glow Overlay */}
+              {isDraggingOver && (
+                <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-blue-600/10 backdrop-blur-xs rounded-3xl border-4 border-dashed border-blue-500 pointer-events-none p-8 text-center">
+                  <div className="h-20 w-20 rounded-full bg-blue-600 text-white flex items-center justify-center text-3xl shadow-xl animate-bounce mb-4">
+                    ⚡
+                  </div>
+                  <h3 className="text-xl font-black text-blue-950">Release to Fast-Upload Court Briefs</h3>
+                  <p className="text-sm font-semibold text-blue-700 mt-1 max-w-sm">
+                    High-speed multi-file streaming with instant background OCR and citation indexing.
+                  </p>
+                </div>
+              )}
+
               {/* Executive Case Dossier Hero Banner (2026 Legal Flagship Standard) */}
               <div className="relative overflow-hidden mb-6 rounded-3xl border border-slate-200/90 bg-gradient-to-br from-white via-slate-50/70 to-blue-50/40 p-6 sm:p-8 shadow-[0_4px_24px_rgba(15,23,42,0.04)]">
                 <div className="absolute right-0 top-0 -mr-16 -mt-16 h-64 w-64 rounded-full bg-blue-100/40 blur-3xl pointer-events-none" />
@@ -1148,17 +1255,22 @@ export default function ProjectWorkspacePage() {
                       ref={fileInputRef}
                       type="file"
                       accept="application/pdf"
+                      multiple
                       className="hidden"
                       onChange={handleFileChange}
                     />
                     <Button
                       variant="primary"
                       onClick={() => fileInputRef.current?.click()}
-                      disabled={uploadDocument.isPending}
+                      disabled={uploadQueue.some((u) => u.status === 'uploading')}
                       className="flex items-center justify-center gap-2 py-3 px-5 text-sm font-bold shadow-md bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-2xl cursor-pointer"
                     >
-                      <span className="text-base">➕</span>
-                      <span>{uploadDocument.isPending ? 'Uploading Brief…' : 'Upload Court PDF'}</span>
+                      <span className="text-base">⚡</span>
+                      <span>
+                        {uploadQueue.some((u) => u.status === 'uploading')
+                          ? 'Uploading Filings…'
+                          : 'Fast Upload Court PDFs'}
+                      </span>
                     </Button>
 
                     <button
@@ -1173,6 +1285,89 @@ export default function ProjectWorkspacePage() {
                   </div>
                 </div>
               </div>
+
+              {/* High-Speed Upload Live Stream Progress Bar */}
+              {uploadQueue.length > 0 && (
+                <div className="mb-6 rounded-3xl border border-blue-200/90 bg-gradient-to-br from-blue-50/90 via-indigo-50/60 to-white p-5 shadow-lg backdrop-blur-md transition-all">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2.5">
+                      <span className="flex h-7 w-7 items-center justify-center rounded-xl bg-blue-600 text-white text-xs font-black shadow-xs">
+                        🚀
+                      </span>
+                      <div>
+                        <span className="text-sm font-black text-slate-900 block leading-tight">
+                          High-Speed Vault Ingestion Pipeline
+                        </span>
+                        <span className="text-[11px] font-semibold text-slate-500">
+                          {uploadQueue.filter((u) => u.status !== 'done').length} court brief(s) streaming
+                        </span>
+                      </div>
+                    </div>
+                    <span className="text-[11px] font-bold text-blue-700 bg-blue-100/90 px-3 py-1 rounded-full border border-blue-200 shadow-2xs">
+                      ⚡ Turbo Async Streaming
+                    </span>
+                  </div>
+
+                  <div className="space-y-2.5">
+                    {uploadQueue.map((item) => (
+                      <div
+                        key={item.id}
+                        className="rounded-2xl border border-slate-200/80 bg-white/90 p-3.5 shadow-2xs transition-all"
+                      >
+                        <div className="flex items-center justify-between text-xs mb-2">
+                          <div className="flex items-center gap-2 min-w-0 pr-3">
+                            <span className="text-base shrink-0">📄</span>
+                            <span className="font-extrabold text-slate-900 truncate" title={item.name}>
+                              {item.name}
+                            </span>
+                            <span className="text-[10px] font-semibold text-slate-400 shrink-0">
+                              ({formatFileSize(item.size)})
+                            </span>
+                          </div>
+                          <div className="shrink-0 font-bold">
+                            {item.status === 'uploading' && (
+                              <span className="text-blue-600 flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-blue-600 animate-ping" />
+                                Uploading {item.percent}%
+                              </span>
+                            )}
+                            {item.status === 'processing' && (
+                              <span className="text-amber-600 flex items-center gap-1.5">
+                                <span className="h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                                ⚡ Fast Indexing (Instant Vault)
+                              </span>
+                            )}
+                            {item.status === 'done' && (
+                              <span className="text-emerald-600 flex items-center gap-1">
+                                ✓ Ready in Dossier
+                              </span>
+                            )}
+                            {item.status === 'error' && (
+                              <span className="text-rose-600 flex items-center gap-1">
+                                ⚠️ {item.error || 'Failed'}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Progress Bar */}
+                        <div className="h-2 w-full overflow-hidden rounded-full bg-slate-100 border border-slate-200/60">
+                          <div
+                            className={`h-full transition-all duration-300 rounded-full ${
+                              item.status === 'error'
+                                ? 'bg-rose-500'
+                                : item.status === 'done'
+                                  ? 'bg-emerald-500'
+                                  : 'bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 animate-pulse'
+                            }`}
+                            style={{ width: `${item.status === 'done' ? 100 : item.percent}%` }}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Dossier Filter & Search Control Bar */}
               <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">

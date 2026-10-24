@@ -88,7 +88,7 @@ export function useDocuments(projectId: string | undefined) {
     refetchInterval: (query) => {
       const pages = query.state.data?.pages as Paginated<Document>[] | undefined
       const anyProcessing = pages?.some((p) => p.data.some((d) => d.status === 'processing'))
-      return anyProcessing ? 2500 : false
+      return anyProcessing ? 1500 : false
     },
   })
 }
@@ -97,12 +97,23 @@ export function useUploadDocument(projectId: string | undefined) {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async (file: File) => {
+    mutationFn: async (
+      payload: File | { file: File; onProgress?: (percent: number) => void },
+    ) => {
+      const file = payload instanceof File ? payload : payload.file
+      const onProgress = payload instanceof File ? undefined : payload.onProgress
+
       const form = new FormData()
       form.append('file', file)
       return (
         await api.post<{ data: Document }>(`/projects/${projectId}/documents`, form, {
           headers: { 'Content-Type': 'multipart/form-data' },
+          onUploadProgress: (progressEvent) => {
+            if (progressEvent.total && onProgress) {
+              const percent = Math.round((progressEvent.loaded * 100) / progressEvent.total)
+              onProgress(Math.min(99, percent))
+            }
+          },
         })
       ).data.data
     },
