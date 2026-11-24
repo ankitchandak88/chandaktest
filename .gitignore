@@ -39,6 +39,10 @@ Thumbs.db
 dist/
 # Non-production folders & documentation
 deploy/
+docs/
+CLAUDE*
+Research*
+*.docx
 scratch/
 *.log
 *.tmp
