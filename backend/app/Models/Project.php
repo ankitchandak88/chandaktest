@@ -55,6 +55,16 @@ class Project extends Model
         return $this->hasMany(WorkspaceItem::class);
     }
 
+    public function workspaces(): HasMany
+    {
+        return $this->hasMany(Workspace::class)->orderBy('order_index');
+    }
+
+    public function phraseDefinitions(): HasMany
+    {
+        return $this->hasMany(PhraseDefinition::class)->orderBy('term');
+    }
+
     public function links(): HasMany
     {
         return $this->hasMany(Link::class);

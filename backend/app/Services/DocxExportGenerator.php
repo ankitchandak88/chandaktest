@@ -22,32 +22,82 @@ class DocxExportGenerator
 {
     public function generate(Project $project, string $outputPath): void
     {
-        $project->loadMissing('excerpts.document', 'notes');
+        $project->loadMissing(['excerpts.document', 'notes', 'workspaces.items', 'phraseDefinitions']);
 
         $phpWord = new PhpWord;
-        $section = $phpWord->addSection();
+        $section = $phpWord->addSection([
+            'marginTop' => 1100,
+            'marginBottom' => 1100,
+            'marginLeft' => 1200,
+            'marginRight' => 1200,
+        ]);
 
-        $section->addText($project->name, ['bold' => true, 'size' => 20]);
+        // Legal Header
+        $section->addText($project->name, ['bold' => true, 'size' => 22, 'color' => '1e293b']);
+        $section->addText('Legal Research Synthesis & Case Brief', ['italic' => true, 'size' => 11, 'color' => '64748b']);
+        $section->addText('Generated on ' . date('F j, Y, g:i a') . ' via ChandakText', ['size' => 9, 'color' => '94a3b8']);
         $section->addTextBreak();
 
-        foreach ($project->excerpts as $excerpt) {
-            $source = $excerpt->document->original_filename ?? 'Unknown source';
-            $section->addText("Source: {$source}, page {$excerpt->page_number}", ['italic' => true, 'size' => 9]);
-            $section->addText($excerpt->text);
+        // 1. Workspaces / Boards Summary
+        $workspaces = $project->workspaces;
+        if ($workspaces->isNotEmpty()) {
+            $section->addText('Workspace Boards', ['bold' => true, 'size' => 14, 'color' => '0f172a']);
+            foreach ($workspaces as $ws) {
+                $section->addText("• {$ws->name} (" . ($ws->items->count()) . " items)", ['size' => 10, 'color' => '334155']);
+            }
             $section->addTextBreak();
         }
 
+        // 2. Excerpts & Evidentiary Citations
+        $section->addText('Evidentiary Citations & Excerpts', ['bold' => true, 'size' => 16, 'color' => '0f172a']);
+        $section->addTextBreak();
+
+        foreach ($project->excerpts as $idx => $excerpt) {
+            $source = $excerpt->document->original_filename ?? 'Pleading / Exhibit';
+            $citationHeader = "Citation [" . ($idx + 1) . "] — Source: {$source}, Page {$excerpt->page_number}";
+            
+            $section->addText($citationHeader, ['bold' => true, 'italic' => true, 'size' => 9, 'color' => '475569']);
+            
+            // Blockquote styling
+            $section->addText('“' . trim($excerpt->text) . '”', [
+                'italic' => true,
+                'size' => 10.5,
+                'color' => '0f172a',
+            ], [
+                'spaceAfter' => 120,
+                'indentation' => ['left' => 360, 'right' => 200],
+            ]);
+            $section->addTextBreak(1);
+        }
+
+        // 3. Notes & Submissions
         if ($project->notes->isNotEmpty()) {
             $section->addPageBreak();
-            $section->addText('Notes', ['bold' => true, 'size' => 16]);
+            $section->addText('Argument Notes & Submissions', ['bold' => true, 'size' => 16, 'color' => '0f172a']);
             $section->addTextBreak();
 
             foreach ($project->notes as $note) {
                 if (filled($note->title)) {
-                    $section->addText($note->title, ['bold' => true, 'size' => 12]);
+                    $section->addText($note->title, ['bold' => true, 'size' => 12, 'color' => '1e293b']);
                 }
-                $section->addText($note->content);
+                $section->addText($note->content, ['size' => 10.5, 'color' => '334155']);
                 $section->addTextBreak();
+            }
+        }
+
+        // 4. Defined Terms Glossary (Lesson 17 & Corporate Law Demo)
+        $terms = $project->phraseDefinitions;
+        if ($terms->isNotEmpty()) {
+            $section->addPageBreak();
+            $section->addText('Defined Terms & Contract Glossary', ['bold' => true, 'size' => 16, 'color' => '0f172a']);
+            $section->addText('Extracted from contracts, covenants, and case definitions.', ['italic' => true, 'size' => 10, 'color' => '64748b']);
+            $section->addTextBreak();
+
+            foreach ($terms as $t) {
+                $pageInfo = $t->page_number ? " (Page {$t->page_number})" : '';
+                $section->addText("“{$t->term}”{$pageInfo}", ['bold' => true, 'size' => 11, 'color' => 'b45309']);
+                $section->addText($t->definition, ['size' => 10, 'color' => '334155']);
+                $section->addTextBreak(1);
             }
         }
 

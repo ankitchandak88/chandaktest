@@ -32,6 +32,16 @@ interface PdfViewerProps {
   // can render itself - clicking it in the in-reader mode switch delegates
   // back up to the parent rather than PdfViewer owning that navigation.
   onSwitchToWorkspace?: () => void
+  // LiquidText-grade two-way link focus: when a card or link anchor is clicked
+  // on the canvas, the reader highlights the exact source rectangle with an animated pulse.
+  focusExcerpt?: {
+    id?: string
+    page_number?: number
+    pageNumber?: number
+    rects?: SourceRect[]
+    source_rects?: SourceRect[]
+    text?: string
+  } | null
 }
 
 type AnnotationTool = 'select' | 'comment' | 'pen' | 'highlighter' | 'eraser' | 'lasso'
@@ -189,6 +199,7 @@ export default function PdfViewer({
   onSaveExcerpt,
   initialPage,
   onSwitchToWorkspace,
+  focusExcerpt,
 }: PdfViewerProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [numPages, setNumPages] = useState(0)
@@ -196,7 +207,11 @@ export default function PdfViewer({
     null,
   )
   const [selection, setSelection] = useState<SelectionInfo | null>(null)
-  const [scale] = useState(1.2)
+  const [scale, setScale] = useState<number>(0.85)
+  const [zoomMode, setZoomMode] = useState<'fit-page' | 'fit-width' | 'custom'>('fit-page')
+  const [viewMode, setViewMode] = useState<'single' | 'continuous'>('single')
+  const [currentPage, setCurrentPage] = useState<number>(initialPage || 1)
+  const [pageInput, setPageInput] = useState<string>(String(initialPage || 1))
   const [error, setError] = useState<string | null>(null)
   const [tool, setTool] = useState<AnnotationTool>('select')
   const [readerMode, setReaderMode] = useState<ReaderMode>('document')
@@ -253,6 +268,10 @@ export default function PdfViewer({
   const [outline, setOutline] = useState<OutlineNode[]>([])
   const [squeezeMode, setSqueezeMode] = useState<boolean>(false)
   const [expandedPages, setExpandedPages] = useState<Set<number>>(new Set())
+  const [squeezeSearch, setSqueezeSearch] = useState<string>('')
+  const [searchMatchedPages, setSearchMatchedPages] = useState<Set<number>>(new Set())
+  const [isSearchingDoc, setIsSearchingDoc] = useState<boolean>(false)
+  const pageTextCacheRef = useRef<Map<number, string>>(new Map())
 
   // Advocate Court Paper-Book States (reorder pleadings, rotate scans, tag exhibits, exclude unneeded pages)
   const [pageRotations, setPageRotations] = useState<Record<number, number>>({})
@@ -351,6 +370,220 @@ export default function PdfViewer({
     }
   }, [])
 
+  useEffect(() => {
+    setPageInput(String(currentPage))
+  }, [currentPage])
+
+  const applyFitScale = useCallback(
+    async (mode: 'fit-page' | 'fit-width', pageNum: number = currentPage) => {
+      if (!containerRef.current || !pdfDoc) return
+      const container = containerRef.current
+      if (container.clientHeight < 80 || container.clientWidth < 80) {
+        requestAnimationFrame(() => applyFitScale(mode, pageNum))
+        return
+      }
+      try {
+        const page = await pdfDoc.getPage(pageNum)
+        const rotation = pageRotations[pageNum] ?? 0
+        const unscaledViewport = page.getViewport({ scale: 1, rotation })
+
+        const paddingX = viewMode === 'single' ? 12 : 32
+        const paddingY = viewMode === 'single' ? 14 : 48
+        const availWidth = Math.max(120, container.clientWidth - paddingX)
+        const availHeight = Math.max(120, container.clientHeight - paddingY)
+
+        if (mode === 'fit-page') {
+          const scaleX = availWidth / unscaledViewport.width
+          const scaleY = availHeight / unscaledViewport.height
+          const fitScale = Math.min(scaleX, scaleY)
+          const rounded = Math.max(0.3, Math.min(2.5, Math.round(fitScale * 100) / 100))
+          setScale(rounded)
+        } else if (mode === 'fit-width') {
+          const fitScale = availWidth / unscaledViewport.width
+          const rounded = Math.max(0.35, Math.min(3.0, Math.round(fitScale * 100) / 100))
+          setScale(rounded)
+        }
+      } catch (err) {
+        console.error('Failed to calculate fit scale:', err)
+      }
+    },
+    [pdfDoc, currentPage, pageRotations, viewMode],
+  )
+
+  useEffect(() => {
+    if (!pdfDoc || zoomMode === 'custom') return
+
+    const timer = setTimeout(() => {
+      applyFitScale(zoomMode, currentPage)
+    }, 50)
+
+    return () => clearTimeout(timer)
+  }, [pdfDoc, viewMode === 'single' ? currentPage : null, zoomMode, applyFitScale])
+
+  useEffect(() => {
+    const container = containerRef.current
+    if (!container || !pdfDoc) return
+
+    const ro = new ResizeObserver(() => {
+      if (zoomMode === 'fit-page' || zoomMode === 'fit-width') {
+        applyFitScale(zoomMode, currentPage)
+      }
+    })
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [pdfDoc, zoomMode, currentPage, applyFitScale])
+
+  function handlePageChange(newPage: number) {
+    if (newPage < 1 || newPage > (numPages || 1)) return
+    setCurrentPage(newPage)
+    setPageInput(String(newPage))
+    if (viewMode === 'continuous') {
+      setTimeout(() => {
+        containerRef.current
+          ?.querySelector(`[data-page-number="${newPage}"]`)
+          ?.scrollIntoView({ block: 'start' })
+      }, 30)
+    }
+  }
+
+  function handlePageInputCommit() {
+    const parsed = parseInt(pageInput, 10)
+    if (!isNaN(parsed) && parsed >= 1 && parsed <= numPages) {
+      handlePageChange(parsed)
+    } else {
+      setPageInput(String(currentPage))
+    }
+  }
+
+  function handleZoomIn() {
+    setZoomMode('custom')
+    setScale((s) => Math.min(3.0, Math.round((s + 0.15) * 100) / 100))
+  }
+
+  function handleZoomOut() {
+    setZoomMode('custom')
+    setScale((s) => Math.max(0.35, Math.round((s - 0.15) * 100) / 100))
+  }
+
+  function handleFitPage() {
+    setZoomMode('fit-page')
+    applyFitScale('fit-page', currentPage)
+  }
+
+  function handleFitWidth() {
+    setZoomMode('fit-width')
+    applyFitScale('fit-width', currentPage)
+  }
+
+  // Keyboard shortcuts: Esc to dismiss popups, left/right arrows or page-up/down to flip pages in single mode
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if (e.key === 'Escape') {
+        let handled = false
+        if (pendingComment) {
+          setPendingComment(null)
+          setCommentDraft('')
+          handled = true
+        }
+        if (openComment) {
+          setOpenComment(null)
+          handled = true
+        }
+        if (selection) {
+          setSelection(null)
+          window.getSelection()?.removeAllRanges()
+          handled = true
+        }
+        if (lassoSelection) {
+          setLassoSelection(null)
+          handled = true
+        }
+        if (tool === 'comment') {
+          setTool('select')
+          handled = true
+        }
+        if (handled) {
+          e.preventDefault()
+          e.stopPropagation()
+          return
+        }
+      }
+
+      const activeEl = document.activeElement
+      const tagName = activeEl?.tagName?.toLowerCase()
+      if (tagName === 'input' || tagName === 'textarea' || (activeEl as HTMLElement)?.isContentEditable) {
+        return
+      }
+
+      if (e.key === 'ArrowRight' || e.key === 'PageDown') {
+        if (viewMode === 'single' && currentPage < numPages) {
+          e.preventDefault()
+          handlePageChange(currentPage + 1)
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'PageUp') {
+        if (viewMode === 'single' && currentPage > 1) {
+          e.preventDefault()
+          handlePageChange(currentPage - 1)
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [viewMode, currentPage, numPages, pendingComment, openComment, selection, lassoSelection, tool])
+
+  // Click outside to dismiss selection popup or pending comment
+  useEffect(() => {
+    function handlePointerDownOutside(e: PointerEvent) {
+      const target = e.target as HTMLElement | null
+      if (!target) return
+
+      // Ignore clicks inside the selection popup or comment popup
+      if (target.closest('[data-selection-popup]') || target.closest('[data-comment-popup]')) {
+        return
+      }
+
+      if (selection) {
+        setSelection(null)
+        window.getSelection()?.removeAllRanges()
+      }
+      if (pendingComment) {
+        setPendingComment(null)
+        setCommentDraft('')
+      }
+    }
+
+    document.addEventListener('pointerdown', handlePointerDownOutside)
+    return () => document.removeEventListener('pointerdown', handlePointerDownOutside)
+  }, [selection, pendingComment])
+
+  // Track active page while scrolling in continuous mode
+  useEffect(() => {
+    if (viewMode !== 'continuous' || !containerRef.current) return
+    const container = containerRef.current
+
+    const handleScroll = () => {
+      const pageEls = container.querySelectorAll<HTMLElement>('[data-page-number]')
+      const containerTop = container.scrollTop
+      const containerMid = containerTop + container.clientHeight / 2
+
+      for (const el of pageEls) {
+        const top = el.offsetTop
+        const bottom = top + el.offsetHeight
+        if (containerMid >= top && containerMid <= bottom) {
+          const p = Number(el.getAttribute('data-page-number'))
+          if (p && p !== currentPage) {
+            setCurrentPage(p)
+          }
+          break
+        }
+      }
+    }
+
+    container.addEventListener('scroll', handleScroll, { passive: true })
+    return () => container.removeEventListener('scroll', handleScroll)
+  }, [viewMode, currentPage])
+
   const { data: annotations } = useAnnotations(documentId)
   const createAnnotation = useCreateAnnotation(documentId)
   const deleteAnnotation = useDeleteAnnotation(documentId)
@@ -428,6 +661,14 @@ export default function PdfViewer({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pdfDoc, initialPage])
+
+  // LiquidText-grade two-way navigation: smoothly jump to target page when focusExcerpt changes
+  useEffect(() => {
+    const p = focusExcerpt?.page_number ?? focusExcerpt?.pageNumber
+    if (pdfDoc && p) {
+      jumpToPage(p)
+    }
+  }, [pdfDoc, focusExcerpt])
 
   const annotationsByPage = useMemo(() => {
     const map = new Map<number, Annotation[]>()
@@ -755,9 +996,14 @@ export default function PdfViewer({
   }
 
   function jumpToPage(pageNumber: number) {
-    containerRef.current
-      ?.querySelector(`[data-page-number="${pageNumber}"]`)
-      ?.scrollIntoView({ block: 'start' })
+    setCurrentPage(pageNumber)
+    if (viewMode === 'continuous') {
+      setTimeout(() => {
+        containerRef.current
+          ?.querySelector(`[data-page-number="${pageNumber}"]`)
+          ?.scrollIntoView({ block: 'start' })
+      }, 30)
+    }
   }
 
   // HiLiteView (Phase 3): every highlight-type annotation across the whole
@@ -780,6 +1026,53 @@ export default function PdfViewer({
     [annotations],
   )
 
+  // LiquidText Lesson 8: Search in depth & Pinch Search
+  useEffect(() => {
+    if (!squeezeMode || !pdfDoc || !squeezeSearch.trim()) {
+      setSearchMatchedPages(new Set())
+      setIsSearchingDoc(false)
+      return
+    }
+
+    let active = true
+    const term = squeezeSearch.toLowerCase().trim()
+    setIsSearchingDoc(true)
+
+    const timer = setTimeout(async () => {
+      const matched = new Set<number>()
+      try {
+        for (let i = 1; i <= numPages; i++) {
+          if (!active) return
+          let pageText = pageTextCacheRef.current.get(i)
+          if (pageText === undefined) {
+            const page = await pdfDoc.getPage(i)
+            const textContent = await page.getTextContent()
+            pageText = textContent.items
+              .map((item) => ('str' in item ? (item as { str: string }).str : ''))
+              .join(' ')
+              .toLowerCase()
+            pageTextCacheRef.current.set(i, pageText)
+          }
+          if (pageText.includes(term)) {
+            matched.add(i)
+          }
+        }
+        if (active) {
+          setSearchMatchedPages(matched)
+          setIsSearchingDoc(false)
+        }
+      } catch (err) {
+        console.error('Error searching document pages:', err)
+        if (active) setIsSearchingDoc(false)
+      }
+    }, 250)
+
+    return () => {
+      active = false
+      clearTimeout(timer)
+    }
+  }, [squeezeMode, pdfDoc, squeezeSearch, numPages])
+
   type PageSegment =
     | { type: 'page'; pageNumber: number }
     | { type: 'collapsed'; startPage: number; endPage: number; count: number }
@@ -796,12 +1089,15 @@ export default function PdfViewer({
     let collapsedCount = 0
     let collapsedStart: number | null = null
     let collapsedEnd: number | null = null
+    const hasSearch = Boolean(squeezeSearch.trim())
 
     for (const p of activeOrder) {
-      const hasAnnotations = (annotationsByPage.get(p)?.length ?? 0) > 0
+      const isMatch = hasSearch
+        ? searchMatchedPages.has(p)
+        : (annotationsByPage.get(p)?.length ?? 0) > 0
       const isManuallyExpanded = expandedPages.has(p)
 
-      if (hasAnnotations || isManuallyExpanded) {
+      if (isMatch || isManuallyExpanded) {
         if (collapsedCount > 0 && collapsedStart !== null && collapsedEnd !== null) {
           segments.push({
             type: 'collapsed',
@@ -831,7 +1127,7 @@ export default function PdfViewer({
     }
 
     return segments
-  }, [squeezeMode, numPages, pageOrder, excludedPages, annotationsByPage, expandedPages])
+  }, [squeezeMode, numPages, pageOrder, excludedPages, annotationsByPage, expandedPages, squeezeSearch, searchMatchedPages])
 
   if (error) {
     return <p className="p-4 text-sm text-red-400">{error}</p>
@@ -862,6 +1158,269 @@ export default function PdfViewer({
           </button>
         </div>
       )}
+
+      {/* Top Reader Controls: Page Navigation, View Mode, and Fit/Zoom */}
+      <div
+        className={`flex flex-wrap items-center justify-between gap-2 border-b px-3 py-1.5 text-xs backdrop-blur-md transition-colors z-20 shrink-0 select-none ${
+          readingTheme === 'dark'
+            ? 'bg-slate-900/95 border-slate-800 text-slate-200'
+            : readingTheme === 'sepia'
+              ? 'bg-[#eedcb4]/95 border-[#dfcaa2] text-[#433422]'
+              : 'bg-white/95 border-slate-200/90 text-slate-800'
+        }`}
+      >
+        {/* Left: Page Navigation */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => handlePageChange(currentPage - 1)}
+            disabled={currentPage <= 1}
+            className={`flex h-7 w-7 items-center justify-center rounded-lg border font-bold transition-all shadow-2xs cursor-pointer ${
+              readingTheme === 'dark'
+                ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed'
+                : readingTheme === 'sepia'
+                  ? 'border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc] disabled:opacity-30 disabled:cursor-not-allowed'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed'
+            }`}
+            title="Previous Page (Left Arrow or Page Up)"
+          >
+            ◀
+          </button>
+          <div className="flex items-center gap-1.5 font-bold text-xs">
+            <span
+              className={
+                readingTheme === 'dark'
+                  ? 'text-slate-400 font-medium'
+                  : readingTheme === 'sepia'
+                    ? 'text-[#785b34] font-medium'
+                    : 'text-slate-500 font-medium'
+              }
+            >
+              Page
+            </span>
+            <input
+              type="text"
+              value={pageInput}
+              onChange={(e) => setPageInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handlePageInputCommit()
+              }}
+              onBlur={handlePageInputCommit}
+              className={`h-7 w-12 rounded-lg border text-center font-bold focus:outline-none shadow-2xs ${
+                readingTheme === 'dark'
+                  ? 'border-slate-700 bg-slate-800 text-white focus:border-cyan-500'
+                  : readingTheme === 'sepia'
+                    ? 'border-[#d4be95] bg-[#fdf9f0] text-[#433422] focus:border-amber-600'
+                    : 'border-slate-300 bg-white text-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500'
+              }`}
+            />
+            <span
+              className={
+                readingTheme === 'dark'
+                  ? 'text-slate-400 font-medium'
+                  : readingTheme === 'sepia'
+                    ? 'text-[#785b34] font-medium'
+                    : 'text-slate-500 font-medium'
+              }
+            >
+              of {numPages || '–'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => handlePageChange(currentPage + 1)}
+            disabled={currentPage >= numPages}
+            className={`flex h-7 w-7 items-center justify-center rounded-lg border font-bold transition-all shadow-2xs cursor-pointer ${
+              readingTheme === 'dark'
+                ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700 disabled:opacity-30 disabled:cursor-not-allowed'
+                : readingTheme === 'sepia'
+                  ? 'border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc] disabled:opacity-30 disabled:cursor-not-allowed'
+                  : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed'
+            }`}
+            title="Next Page (Right Arrow or Page Down)"
+          >
+            ▶
+          </button>
+
+          <div
+            className={`mx-1.5 h-4 w-px ${
+              readingTheme === 'dark'
+                ? 'bg-slate-700'
+                : readingTheme === 'sepia'
+                  ? 'bg-[#d8c39d]'
+                  : 'bg-slate-300'
+            }`}
+          />
+
+          {/* View Mode Toggle: Single Page vs Continuous Scroll */}
+          <div
+            className={`flex items-center rounded-lg p-0.5 border ${
+              readingTheme === 'dark'
+                ? 'bg-slate-800/90 border-slate-700/80'
+                : readingTheme === 'sepia'
+                  ? 'bg-[#dfcaa2]/70 border-[#cbaf80]'
+                  : 'bg-slate-100 border-slate-200'
+            }`}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setViewMode('single')
+                if (zoomMode === 'fit-page' || zoomMode === 'fit-width') {
+                  applyFitScale(zoomMode, currentPage)
+                }
+              }}
+              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-bold transition-all cursor-pointer ${
+                viewMode === 'single'
+                  ? readingTheme === 'dark'
+                    ? 'bg-slate-700 text-cyan-300 shadow-xs'
+                    : readingTheme === 'sepia'
+                      ? 'bg-[#fdf9f0] text-amber-900 shadow-xs'
+                      : 'bg-white text-blue-700 shadow-xs'
+                  : readingTheme === 'dark'
+                    ? 'text-slate-400 hover:text-slate-200'
+                    : readingTheme === 'sepia'
+                      ? 'text-[#785b34] hover:text-[#433422]'
+                      : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Single Page Mode: Focus on 1 full page without scrolling"
+            >
+              <span>📄</span>
+              <span>Single</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('continuous')}
+              className={`flex items-center gap-1 rounded-md px-2.5 py-1 text-xs font-bold transition-all cursor-pointer ${
+                viewMode === 'continuous'
+                  ? readingTheme === 'dark'
+                    ? 'bg-slate-700 text-cyan-300 shadow-xs'
+                    : readingTheme === 'sepia'
+                      ? 'bg-[#fdf9f0] text-amber-900 shadow-xs'
+                      : 'bg-white text-blue-700 shadow-xs'
+                  : readingTheme === 'dark'
+                    ? 'text-slate-400 hover:text-slate-200'
+                    : readingTheme === 'sepia'
+                      ? 'text-[#785b34] hover:text-[#433422]'
+                      : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Continuous Scroll Mode: View all pages vertically"
+            >
+              <span>📜</span>
+              <span>Scroll</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Right: Fit & Zoom Controls */}
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={handleFitPage}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+              zoomMode === 'fit-page'
+                ? readingTheme === 'dark'
+                  ? 'bg-cyan-600 text-white shadow-xs'
+                  : readingTheme === 'sepia'
+                    ? 'bg-[#b45309] text-white shadow-xs'
+                    : 'bg-blue-600 text-white shadow-xs'
+                : readingTheme === 'dark'
+                  ? 'border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  : readingTheme === 'sepia'
+                    ? 'border border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc]'
+                    : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+            }`}
+            title="Fit entire page height (Show 1 full page on screen)"
+          >
+            <span className="text-sm">↕</span>
+            <span>Fit Page</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={handleFitWidth}
+            className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+              zoomMode === 'fit-width'
+                ? readingTheme === 'dark'
+                  ? 'bg-cyan-600 text-white shadow-xs'
+                  : readingTheme === 'sepia'
+                    ? 'bg-[#b45309] text-white shadow-xs'
+                    : 'bg-blue-600 text-white shadow-xs'
+                : readingTheme === 'dark'
+                  ? 'border border-slate-700 bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  : readingTheme === 'sepia'
+                    ? 'border border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc]'
+                    : 'border border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+            }`}
+            title="Fit page width to screen"
+          >
+            <span className="text-sm">↔</span>
+            <span>Fit Width</span>
+          </button>
+
+          <div
+            className={`mx-1.5 h-4 w-px ${
+              readingTheme === 'dark'
+                ? 'bg-slate-700'
+                : readingTheme === 'sepia'
+                  ? 'bg-[#d8c39d]'
+                  : 'bg-slate-300'
+            }`}
+          />
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={handleZoomOut}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg border font-black transition-all shadow-2xs cursor-pointer text-sm ${
+                readingTheme === 'dark'
+                  ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                  : readingTheme === 'sepia'
+                    ? 'border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc]'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+              title="Zoom Out (−15%)"
+            >
+              −
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                if (Math.round(scale * 100) === 100) {
+                  handleFitPage()
+                } else {
+                  setZoomMode('custom')
+                  setScale(1.0)
+                }
+              }}
+              className={`min-w-[48px] rounded-lg border py-1 text-center text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                readingTheme === 'dark'
+                  ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                  : readingTheme === 'sepia'
+                    ? 'border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc]'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+              title="Click to reset to 100% or Fit Page"
+            >
+              {Math.round(scale * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={handleZoomIn}
+              className={`flex h-7 w-7 items-center justify-center rounded-lg border font-black transition-all shadow-2xs cursor-pointer text-sm ${
+                readingTheme === 'dark'
+                  ? 'border-slate-700 bg-slate-800 text-slate-200 hover:bg-slate-700'
+                  : readingTheme === 'sepia'
+                    ? 'border-[#dfcaa2] bg-[#f4ecd8] text-[#433422] hover:bg-[#e4d6bc]'
+                    : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-100'
+              }`}
+              title="Zoom In (+15%)"
+            >
+              +
+            </button>
+          </div>
+        </div>
+      </div>
 
       <div className="relative flex flex-1 overflow-hidden">
         {sidePanel !== 'none' && (
@@ -1147,7 +1706,9 @@ export default function PdfViewer({
 
       <div
         ref={containerRef}
-        className={`relative flex-1 overflow-auto p-4 transition-colors duration-300 ${
+        className={`relative flex-1 overflow-auto transition-colors duration-300 ${
+          viewMode === 'single' ? 'px-1 py-1.5 sm:px-2 sm:py-2' : 'p-4'
+        } ${
           readingTheme === 'sepia'
             ? 'bg-[#f4ecd8] text-[#433422]'
             : readingTheme === 'light'
@@ -1157,10 +1718,16 @@ export default function PdfViewer({
       >
         {!pdfDoc && <p className="text-sm text-slate-400">Loading PDF…</p>}
 
-        <div className="mx-auto flex max-w-3xl flex-col gap-4">
-          {squeezeMode && (
+        <div
+          className={`mx-auto flex flex-col gap-4 ${
+            viewMode === 'single'
+              ? 'w-full min-h-full items-center justify-center'
+              : 'max-w-3xl'
+          }`}
+        >
+          {squeezeMode && viewMode !== 'single' && (
             <div
-              className={`sticky top-0 z-10 flex items-center justify-between rounded-2xl border px-4 py-3 shadow-lg backdrop-blur-md transition-all ${
+              className={`sticky top-0 z-10 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 shadow-lg backdrop-blur-md transition-all ${
                 readingTheme === 'sepia'
                   ? 'border-[#b45309]/50 bg-[#fffbeb] text-[#451a03]'
                   : readingTheme === 'dark'
@@ -1180,7 +1747,7 @@ export default function PdfViewer({
                           : 'text-amber-900'
                     }`}
                   >
-                    Squeeze Mode Active
+                    Pinch / Squeeze Mode
                   </span>
                   <p
                     className={`text-[11px] font-semibold leading-snug ${
@@ -1191,28 +1758,64 @@ export default function PdfViewer({
                           : 'text-amber-800'
                     }`}
                   >
-                    Unhighlighted pages collapsed so your notes and highlights meet side-by-side
+                    {squeezeSearch.trim()
+                      ? 'Pinching document: showing only pages matching search keyword'
+                      : 'Unhighlighted pages collapsed so your notes and highlights meet side-by-side'}
                   </p>
                 </div>
               </div>
+
+              {/* LiquidText Lesson 8: In-Reader Pinch Search Input */}
               <div className="flex items-center gap-2">
+                <div className="relative flex items-center">
+                  <input
+                    type="text"
+                    value={squeezeSearch}
+                    onChange={(e) => setSqueezeSearch(e.target.value)}
+                    placeholder="Search word to pinch..."
+                    className="h-7 w-40 sm:w-56 rounded-xl border border-amber-400/80 bg-white/95 px-2.5 text-xs text-slate-800 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-amber-500 shadow-2xs font-medium"
+                  />
+                  {squeezeSearch && (
+                    <button
+                      type="button"
+                      onClick={() => setSqueezeSearch('')}
+                      className="absolute right-2 text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
+                      title="Clear pinch search"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+                {isSearchingDoc && (
+                  <span className="text-[10px] font-bold text-amber-600 animate-pulse">Searching…</span>
+                )}
+                {squeezeSearch.trim() && !isSearchingDoc && (
+                  <span className="rounded-md bg-amber-200/90 px-1.5 py-0.5 text-[10px] font-black text-amber-950">
+                    {searchMatchedPages.size} {searchMatchedPages.size === 1 ? 'match' : 'matches'}
+                  </span>
+                )}
+
                 <button
                   type="button"
                   onClick={() => setExpandedPages(new Set())}
-                  className={`rounded-xl px-3 py-1.5 text-xs font-bold transition-all shadow-2xs cursor-pointer ${
+                  className={`rounded-xl px-2.5 py-1 text-xs font-bold transition-all shadow-2xs cursor-pointer ${
                     readingTheme === 'sepia'
                       ? 'bg-[#b45309] text-white hover:bg-[#92400e]'
                       : readingTheme === 'dark'
                         ? 'bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
                         : 'bg-amber-200/90 text-amber-950 hover:bg-amber-300'
                   }`}
+                  title="Collapse all expanded pages back into pinch folds"
                 >
                   Collapse All
                 </button>
                 <button
                   type="button"
-                  onClick={() => setSqueezeMode(false)}
-                  className="rounded-xl bg-slate-900 px-3 py-1.5 text-xs font-bold text-white transition-all hover:bg-black cursor-pointer shadow-2xs"
+                  onClick={() => {
+                    setSqueezeMode(false)
+                    setSqueezeSearch('')
+                  }}
+                  className="rounded-xl bg-slate-900 px-2.5 py-1 text-xs font-bold text-white transition-all hover:bg-black cursor-pointer shadow-2xs"
                 >
                   Exit Squeeze
                 </button>
@@ -1221,105 +1824,138 @@ export default function PdfViewer({
           )}
 
           {pdfDoc &&
-            pageSegments.map((segment) => {
-              if (segment.type === 'collapsed') {
-                return (
-                  <div
-                    key={`collapsed-${segment.startPage}-${segment.endPage}`}
-                    onClick={() => toggleExpandRange(segment.startPage, segment.endPage)}
-                    className={`group flex cursor-pointer items-center justify-between rounded-2xl border-2 border-dashed px-4 py-3.5 shadow-sm transition-all active:scale-[0.99] ${
-                      readingTheme === 'sepia'
-                        ? 'border-[#b45309]/50 bg-[#eedcb4] text-[#451a03] hover:bg-[#e4d1a3]'
-                        : readingTheme === 'dark'
-                          ? 'border-cyan-500/40 bg-slate-800/80 text-slate-100 hover:bg-slate-800'
-                          : 'border-slate-300 bg-white text-slate-800 hover:border-blue-400 hover:bg-blue-50/40'
-                    }`}
-                    title="Click to expand these unannotated pages"
-                  >
-                    <div className="flex items-center gap-3">
+            (viewMode === 'single' ? (
+              <PdfPage
+                key={currentPage}
+                pdfDoc={pdfDoc}
+                theme={readingTheme}
+                pageNumber={currentPage}
+                scale={scale}
+                rotation={pageRotations[currentPage] ?? 0}
+                label={pageLabels[currentPage]}
+                onMouseUp={handleMouseUp}
+                onPageClick={handlePageClick}
+                tool={tool}
+                drawingToolActive={drawingToolActive}
+                annotations={annotationsByPage.get(currentPage) ?? []}
+                focusExcerpt={focusExcerpt}
+                onOpenComment={setOpenComment}
+                onDeleteAnnotation={(id) => {
+                  const annotation = annotations?.find((a) => a.id === id)
+                  deleteAnnotation.mutate(id)
+                  if (annotation) recordDelete(annotation)
+                }}
+                activeStroke={activeStroke?.pageNumber === currentPage ? activeStroke.points : null}
+                activeStrokeColor={tool === 'pen' ? penColor : highlighterColor}
+                activeStrokeSize={tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE}
+                lassoPoints={lassoPoints?.pageNumber === currentPage ? lassoPoints.points : null}
+                lassoSelection={lassoSelection?.pageNumber === currentPage ? lassoSelection.ids : []}
+                onStrokeStart={handleStrokeStart}
+                onStrokeMove={handleStrokeMove}
+                onStrokeEnd={handleStrokeEnd}
+              />
+            ) : (
+              pageSegments.map((segment) => {
+                if (segment.type === 'collapsed') {
+                  return (
+                    <div
+                      key={`collapsed-${segment.startPage}-${segment.endPage}`}
+                      onClick={() => toggleExpandRange(segment.startPage, segment.endPage)}
+                      className={`group flex cursor-pointer items-center justify-between rounded-2xl border-2 border-dashed px-4 py-3.5 shadow-sm transition-all active:scale-[0.99] ${
+                        readingTheme === 'sepia'
+                          ? 'border-[#b45309]/50 bg-[#eedcb4] text-[#451a03] hover:bg-[#e4d1a3]'
+                          : readingTheme === 'dark'
+                            ? 'border-cyan-500/40 bg-slate-800/80 text-slate-100 hover:bg-slate-800'
+                            : 'border-slate-300 bg-white text-slate-800 hover:border-blue-400 hover:bg-blue-50/40'
+                      }`}
+                      title="Click to expand these unannotated pages"
+                    >
+                      <div className="flex items-center gap-3">
+                        <span
+                          className={`flex h-8 w-8 items-center justify-center rounded-xl text-xs font-extrabold ${
+                            readingTheme === 'sepia'
+                              ? 'bg-[#b45309] text-white'
+                              : readingTheme === 'dark'
+                                ? 'bg-cyan-500/20 text-cyan-300'
+                                : 'bg-blue-100 text-blue-700'
+                          }`}
+                        >
+                          ↕
+                        </span>
+                        <div>
+                          <span
+                            className={`text-xs font-extrabold ${
+                              readingTheme === 'sepia'
+                                ? 'text-[#451a03]'
+                                : readingTheme === 'dark'
+                                  ? 'text-slate-100'
+                                  : 'text-slate-900'
+                            }`}
+                          >
+                            Pages {segment.startPage}{segment.startPage === segment.endPage ? '' : `–${segment.endPage}`} Collapsed
+                          </span>
+                          <p
+                            className={`text-[11px] font-medium ${
+                              readingTheme === 'sepia'
+                                ? 'text-[#78350f]'
+                                : readingTheme === 'dark'
+                                  ? 'text-slate-400'
+                                  : 'text-slate-500'
+                            }`}
+                          >
+                            {segment.count} {segment.count === 1 ? 'page' : 'pages'} with no annotations
+                          </p>
+                        </div>
+                      </div>
                       <span
-                        className={`flex h-8 w-8 items-center justify-center rounded-xl text-xs font-extrabold ${
+                        className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-2xs ${
                           readingTheme === 'sepia'
-                            ? 'bg-[#b45309] text-white'
+                            ? 'bg-[#78350f] text-white hover:bg-[#451a03]'
                             : readingTheme === 'dark'
                               ? 'bg-cyan-500/20 text-cyan-300'
-                              : 'bg-blue-100 text-blue-700'
+                              : 'bg-blue-600 text-white'
                         }`}
                       >
-                        ↕
+                        Expand ＋
                       </span>
-                      <div>
-                        <span
-                          className={`text-xs font-extrabold ${
-                            readingTheme === 'sepia'
-                              ? 'text-[#451a03]'
-                              : readingTheme === 'dark'
-                                ? 'text-slate-100'
-                                : 'text-slate-900'
-                          }`}
-                        >
-                          Pages {segment.startPage}{segment.startPage === segment.endPage ? '' : `–${segment.endPage}`} Collapsed
-                        </span>
-                        <p
-                          className={`text-[11px] font-medium ${
-                            readingTheme === 'sepia'
-                              ? 'text-[#78350f]'
-                              : readingTheme === 'dark'
-                                ? 'text-slate-400'
-                                : 'text-slate-500'
-                          }`}
-                        >
-                          {segment.count} {segment.count === 1 ? 'page' : 'pages'} with no annotations
-                        </p>
-                      </div>
                     </div>
-                    <span
-                      className={`rounded-xl px-3 py-1.5 text-xs font-bold shadow-2xs ${
-                        readingTheme === 'sepia'
-                          ? 'bg-[#78350f] text-white hover:bg-[#451a03]'
-                          : readingTheme === 'dark'
-                            ? 'bg-cyan-500/20 text-cyan-300'
-                            : 'bg-blue-600 text-white'
-                      }`}
-                    >
-                      Expand ＋
-                    </span>
-                  </div>
-                )
-              }
+                  )
+                }
 
-              const pageNumber = segment.pageNumber
-              return (
-                <PdfPage
-                  key={pageNumber}
-                  pdfDoc={pdfDoc}
-                  theme={readingTheme}
-                  pageNumber={pageNumber}
-                  scale={scale}
-                  rotation={pageRotations[pageNumber] ?? 0}
-                  label={pageLabels[pageNumber]}
-                  onMouseUp={handleMouseUp}
-                  onPageClick={handlePageClick}
-                  tool={tool}
-                  drawingToolActive={drawingToolActive}
-                  annotations={annotationsByPage.get(pageNumber) ?? []}
-                  onOpenComment={setOpenComment}
-                  onDeleteAnnotation={(id) => {
-                    const annotation = annotations?.find((a) => a.id === id)
-                    deleteAnnotation.mutate(id)
-                    if (annotation) recordDelete(annotation)
-                  }}
-                  activeStroke={activeStroke?.pageNumber === pageNumber ? activeStroke.points : null}
-                  activeStrokeColor={tool === 'pen' ? penColor : highlighterColor}
-                  activeStrokeSize={tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE}
-                  lassoPoints={lassoPoints?.pageNumber === pageNumber ? lassoPoints.points : null}
-                  lassoSelection={lassoSelection?.pageNumber === pageNumber ? lassoSelection.ids : []}
-                  onStrokeStart={handleStrokeStart}
-                  onStrokeMove={handleStrokeMove}
-                  onStrokeEnd={handleStrokeEnd}
-                />
-              )
-            })}
+                const pageNumber = segment.pageNumber
+                return (
+                  <PdfPage
+                    key={pageNumber}
+                    pdfDoc={pdfDoc}
+                    theme={readingTheme}
+                    pageNumber={pageNumber}
+                    scale={scale}
+                    rotation={pageRotations[pageNumber] ?? 0}
+                    label={pageLabels[pageNumber]}
+                    onMouseUp={handleMouseUp}
+                    onPageClick={handlePageClick}
+                    tool={tool}
+                    drawingToolActive={drawingToolActive}
+                    annotations={annotationsByPage.get(pageNumber) ?? []}
+                    focusExcerpt={focusExcerpt}
+                    onOpenComment={setOpenComment}
+                    onDeleteAnnotation={(id) => {
+                      const annotation = annotations?.find((a) => a.id === id)
+                      deleteAnnotation.mutate(id)
+                      if (annotation) recordDelete(annotation)
+                    }}
+                    activeStroke={activeStroke?.pageNumber === pageNumber ? activeStroke.points : null}
+                    activeStrokeColor={tool === 'pen' ? penColor : highlighterColor}
+                    activeStrokeSize={tool === 'pen' ? PEN_SIZE : HIGHLIGHTER_SIZE}
+                    lassoPoints={lassoPoints?.pageNumber === pageNumber ? lassoPoints.points : null}
+                    lassoSelection={lassoSelection?.pageNumber === pageNumber ? lassoSelection.ids : []}
+                    onStrokeStart={handleStrokeStart}
+                    onStrokeMove={handleStrokeMove}
+                    onStrokeEnd={handleStrokeEnd}
+                  />
+                )
+              })
+            ))}
         </div>
 
         {selection &&
@@ -1335,6 +1971,7 @@ export default function PdfViewer({
 
             return (
               <div
+                data-selection-popup="true"
                 className="absolute z-30 flex flex-wrap items-center gap-1.5 rounded-2xl border border-slate-200/90 bg-white/95 p-2 shadow-[0_16px_40px_rgba(15,23,42,0.18)] backdrop-blur-md text-slate-800 max-w-[calc(100%-32px)]"
                 style={{ left, top }}
               >
@@ -1440,6 +2077,19 @@ export default function PdfViewer({
                     ⚠️ Contradiction
                   </button>
                 </div>
+                <div className="flex items-center pl-1 border-l border-slate-200">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelection(null)
+                      window.getSelection()?.removeAllRanges()
+                    }}
+                    className="flex h-6 w-6 items-center justify-center rounded-lg text-slate-400 hover:bg-slate-100 hover:text-slate-700 transition-colors cursor-pointer text-xs font-bold"
+                    title="Close (Esc)"
+                  >
+                    ✕
+                  </button>
+                </div>
               </div>
             )
           })()}
@@ -1455,6 +2105,7 @@ export default function PdfViewer({
 
             return (
               <div
+                data-comment-popup="true"
                 className="absolute z-10 w-60 rounded-md border border-slate-700 bg-slate-800 p-2 shadow-lg"
                 style={{ left, top }}
               >
@@ -1463,6 +2114,14 @@ export default function PdfViewer({
                   rows={3}
                   value={commentDraft}
                   onChange={(e) => setCommentDraft(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Escape') {
+                      e.preventDefault()
+                      e.stopPropagation()
+                      setPendingComment(null)
+                      setCommentDraft('')
+                    }
+                  }}
                   placeholder="Add a comment…"
                   className="w-full rounded border border-slate-700 bg-slate-900 p-1.5 text-xs text-slate-100 outline-none focus:border-accent"
                 />
@@ -1505,6 +2164,7 @@ export default function PdfViewer({
         {openComment && (
           <div className="absolute inset-0 z-20 flex items-start justify-center bg-black/40 pt-24" onClick={() => setOpenComment(null)}>
             <div
+              data-comment-popup="true"
               className="w-72 rounded-md border border-slate-700 bg-slate-800 p-3 shadow-xl"
               onClick={(e) => e.stopPropagation()}
             >
@@ -1603,7 +2263,15 @@ export default function PdfViewer({
             />
             <BottomActionButton
               active={squeezeMode}
-              onClick={() => setSqueezeMode((s) => !s)}
+              onClick={() => {
+                setSqueezeMode((s) => {
+                  const next = !s
+                  if (next && viewMode === 'single') {
+                    setViewMode('continuous')
+                  }
+                  return next
+                })
+              }}
               icon="🤏"
               label={squeezeMode ? 'Squeezed' : 'Squeeze'}
               title="Squeeze document: collapses pages without annotations so highlights meet"
@@ -1802,6 +2470,7 @@ function PdfPage({
   tool,
   drawingToolActive,
   annotations,
+  focusExcerpt,
   onOpenComment,
   onDeleteAnnotation,
   activeStroke,
@@ -1824,6 +2493,14 @@ function PdfPage({
   tool: AnnotationTool
   drawingToolActive: boolean
   annotations: Annotation[]
+  focusExcerpt?: {
+    id?: string
+    page_number?: number
+    pageNumber?: number
+    rects?: SourceRect[]
+    source_rects?: SourceRect[]
+    text?: string
+  } | null
   onOpenComment: (annotation: Annotation) => void
   onDeleteAnnotation: (id: string) => void
   activeStroke: StrokePoint[] | null
@@ -1844,6 +2521,7 @@ function PdfPage({
 
   useEffect(() => {
     let cancelled = false
+    let renderTask: any = null
 
     async function render() {
       const page = await pdfDoc.getPage(pageNumber)
@@ -1856,7 +2534,21 @@ function PdfPage({
       const ctx = canvas.getContext('2d')
       if (!ctx) return
 
-      await page.render({ canvasContext: ctx, viewport }).promise
+      try {
+        renderTask = page.render({ canvasContext: ctx, viewport })
+        await renderTask.promise
+      } catch (err: unknown) {
+        if (
+          typeof err === 'object' &&
+          err !== null &&
+          'name' in err &&
+          (err as { name: string }).name === 'RenderingCancelledException'
+        ) {
+          return
+        }
+        console.error('PDF page render error:', err)
+        return
+      }
       if (cancelled) return
 
       setSize({ width: viewport.width, height: viewport.height })
@@ -1881,6 +2573,11 @@ function PdfPage({
 
     return () => {
       cancelled = true
+      if (renderTask) {
+        try {
+          renderTask.cancel()
+        } catch {}
+      }
     }
   }, [pdfDoc, pageNumber, scale, rotation])
 
@@ -1975,6 +2672,30 @@ function PdfPage({
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
         >
+          {/* LiquidText 2-Way Link Focus Halo: pulses when source excerpt is focused */}
+          {focusExcerpt && (focusExcerpt.page_number ?? focusExcerpt.pageNumber) === pageNumber && (focusExcerpt.source_rects ?? focusExcerpt.rects ?? []).map((r, i) => {
+            const x = r.x * size.width
+            const y = r.y * size.height
+            const w = r.width * size.width
+            const h = r.height * size.height
+            return (
+              <g key={`focus-excerpt-${i}`} className="pointer-events-none">
+                <rect
+                  x={x - 4}
+                  y={y - 4}
+                  width={w + 8}
+                  height={h + 8}
+                  rx={4}
+                  fill="#38bdf8"
+                  fillOpacity={0.28}
+                  stroke="#0284c7"
+                  strokeWidth={2.5}
+                  strokeDasharray="5 3"
+                  className="animate-pulse"
+                />
+              </g>
+            )
+          })}
           {annotations.map((a) => {
             const isLassoSelected = lassoSelection.includes(a.id)
 

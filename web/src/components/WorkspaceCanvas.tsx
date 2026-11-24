@@ -4,6 +4,8 @@ import {
   useCreateLink,
   useCreateNote,
   useCreateTag,
+  useDeleteNote,
+  useDeleteWorkspaceItem,
   useSaveWorkspaceBatch,
   useSuggestExcerptTags,
   useSuggestNoteTags,
@@ -39,15 +41,22 @@ export function parseRichText(content: string): { style: RichTextStyle; text: st
 
 function RichTextContent({ content }: { content: string }) {
   const { style, text } = parseRichText(content)
+  const isTooLight =
+    style.color &&
+    ['#f8fafc', '#ffffff', '#fff', '#f1f5f9', '#e2e8f0', '#cbd5e1', '#94a3b8'].includes(
+      style.color.toLowerCase(),
+    )
+  const textColor = isTooLight ? '#0f172a' : style.color || '#0f172a'
+
   return (
     <span
-      className="canvas-card-text block whitespace-pre-wrap leading-relaxed"
+      className="canvas-card-text block whitespace-pre-wrap leading-relaxed text-[13.5px] font-medium text-slate-900"
       style={{
         fontWeight: style.b ? 'bold' : 'normal',
         fontStyle: style.i ? 'italic' : 'normal',
         textDecoration: style.u ? 'underline' : 'none',
-        fontSize: style.size === 'sm' ? '13px' : style.size === 'lg' ? '19px' : '15px',
-        color: style.color || undefined,
+        fontSize: style.size === 'sm' ? '12px' : style.size === 'lg' ? '16px' : '13.5px',
+        color: textColor,
       }}
     >
       {text}
@@ -68,6 +77,7 @@ interface CanvasCard {
 
 interface WorkspaceCanvasProps {
   projectId: string
+  workspaceId?: string | null
   items: WorkspaceItem[]
   excerpts: Excerpt[]
   notes: Note[]
@@ -104,6 +114,13 @@ function tagColor(tag: Tag): string {
   return TAG_PALETTE[Math.abs(hash) % TAG_PALETTE.length]
 }
 
+export const LEGAL_TAG_DEFS = [
+  { name: 'exhibit', label: 'Exhibit', icon: '🔍', color: '#fbbf24' },
+  { name: 'issue', label: 'Issue', icon: '⚖️', color: '#c084fc' },
+  { name: 'precedent', label: 'Precedent', icon: '📜', color: '#60a5fa' },
+  { name: 'contradiction', label: 'Contradiction', icon: '⚠️', color: '#f87171' },
+] as const
+
 /**
  * The research canvas (docs/01 "Organize excerpts and notes on a flexible
  * workspace canvas" / docs/05 section 5.4). Deliberately plain
@@ -115,6 +132,7 @@ function tagColor(tag: Tag): string {
  */
 export default function WorkspaceCanvas({
   projectId,
+  workspaceId,
   items,
   excerpts,
   notes,
@@ -128,7 +146,7 @@ export default function WorkspaceCanvas({
   onDropExcerpt,
   documents,
 }: WorkspaceCanvasProps) {
-  const saveBatch = useSaveWorkspaceBatch(projectId)
+  const saveBatch = useSaveWorkspaceBatch(projectId, workspaceId)
   const createLink = useCreateLink(projectId)
   const [isDragOver, setIsDragOver] = useState(false)
   const [snapGuide, setSnapGuide] = useState<{ x?: number; y?: number } | null>(null)
@@ -140,7 +158,10 @@ export default function WorkspaceCanvas({
   const suggestExcerptTags = useSuggestExcerptTags()
   const suggestNoteTags = useSuggestNoteTags()
   const createTag = useCreateTag(projectId)
+  const deleteWorkspaceItem = useDeleteWorkspaceItem(projectId)
+  const deleteNote = useDeleteNote(projectId)
   const [legalFilter, setLegalFilter] = useState<'all' | 'issue' | 'precedent' | 'exhibit' | 'contradiction'>('all')
+  const [hideNonMatching, setHideNonMatching] = useState<boolean>(true)
   const [positions, setPositions] = useState<Record<string, { x: number; y: number }>>({})
   const [tagMenuFor, setTagMenuFor] = useState<string | null>(null)
   const [suggestionsFor, setSuggestionsFor] = useState<{ cardKey: string; names: string[] } | null>(null)
@@ -155,7 +176,7 @@ export default function WorkspaceCanvas({
   const [editItalic, setEditItalic] = useState<boolean>(false)
   const [editUnderline, setEditUnderline] = useState<boolean>(false)
   const [editFontSize, setEditFontSize] = useState<'sm' | 'base' | 'lg'>('base')
-  const [editColor, setEditColor] = useState<string>('#f8fafc')
+  const [editColor, setEditColor] = useState<string>('#0f172a')
 
   async function handleAddTextBox() {
     const defaultText = 'New text box'
@@ -174,7 +195,7 @@ export default function WorkspaceCanvas({
     setEditItalic(false)
     setEditUnderline(false)
     setEditFontSize('base')
-    setEditColor('#f8fafc')
+    setEditColor('#0f172a')
   }
 
   function handleStartEditNote(card: CanvasCard) {
@@ -185,7 +206,8 @@ export default function WorkspaceCanvas({
     setEditItalic(!!style.i)
     setEditUnderline(!!style.u)
     setEditFontSize(style.size || 'base')
-    setEditColor(style.color || '#f8fafc')
+    const isLight = style.color && ['#f8fafc', '#ffffff', '#fff'].includes(style.color.toLowerCase())
+    setEditColor(isLight || !style.color ? '#0f172a' : style.color)
   }
 
   async function handleSaveNoteEdit(noteId: string) {
@@ -194,7 +216,7 @@ export default function WorkspaceCanvas({
     if (editItalic) style.i = true
     if (editUnderline) style.u = true
     if (editFontSize !== 'base') style.size = editFontSize
-    if (editColor !== '#f8fafc') style.color = editColor
+    if (editColor !== '#0f172a') style.color = editColor
 
     const hasCustomStyle = Object.keys(style).length > 0
     const serialized = hasCustomStyle
@@ -442,6 +464,50 @@ export default function WorkspaceCanvas({
     }
   }
 
+  async function handleQuickTag(card: CanvasCard, tagName: string) {
+    let tag = tags.find((t) => t.name.toLowerCase() === tagName.toLowerCase())
+    if (!tag) {
+      const def = LEGAL_TAG_DEFS.find((d) => d.name === tagName)
+      tag = await createTag.mutateAsync({ name: tagName, color: def?.color })
+    }
+    toggleTag(card, tag)
+  }
+
+  async function handleDeleteCard(card: CanvasCard, e: React.MouseEvent) {
+    e.stopPropagation()
+    const label = card.kind === 'note' ? 'note' : 'excerpt card'
+    if (!window.confirm(`Are you sure you want to remove this ${label} from the workspace canvas?`)) return
+    if (card.kind === 'note') {
+      await deleteNote.mutateAsync(card.targetId)
+    } else {
+      await deleteWorkspaceItem.mutateAsync(card.item.id)
+    }
+  }
+
+  const legalCounts = useMemo(() => {
+    const counts = { all: cards.length, exhibit: 0, issue: 0, precedent: 0, contradiction: 0 }
+    for (const c of cards) {
+      const lTag = c.tags.find((t) =>
+        ['issue', 'precedent', 'exhibit', 'contradiction', 'ruling'].includes(t.name.toLowerCase())
+      )?.name.toLowerCase()
+      if (lTag === 'exhibit') counts.exhibit++
+      else if (lTag === 'issue') counts.issue++
+      else if (lTag === 'precedent') counts.precedent++
+      else if (lTag === 'contradiction') counts.contradiction++
+    }
+    return counts
+  }, [cards])
+
+  const visibleCards = useMemo(() => {
+    if (legalFilter === 'all' || !hideNonMatching) return cards
+    return cards.filter((c) => {
+      const lTag = c.tags.find((t) =>
+        ['issue', 'precedent', 'exhibit', 'contradiction', 'ruling'].includes(t.name.toLowerCase())
+      )?.name.toLowerCase()
+      return lTag === legalFilter
+    })
+  }, [cards, legalFilter, hideNonMatching])
+
   async function handleSuggestTags(card: CanvasCard) {
     const names =
       card.kind === 'excerpt'
@@ -519,7 +585,26 @@ export default function WorkspaceCanvas({
 
     setStackTargetId(candidateStackTarget)
     setSnapGuide(guideX !== undefined || guideY !== undefined ? { x: guideX, y: guideY } : null)
-    setPositions((prev) => ({ ...prev, [drag.itemId]: { x, y } }))
+
+    const prevPos = positions[drag.itemId] ?? { x, y }
+    const deltaX = x - prevPos.x
+    const deltaY = y - prevPos.y
+
+    const stackChildren = stackGroups.get(drag.itemId)
+    if (stackChildren && stackChildren.length > 1) {
+      setPositions((prev) => {
+        const next = { ...prev, [drag.itemId]: { x, y } }
+        for (const childId of stackChildren) {
+          if (childId !== drag.itemId) {
+            const cp = prev[childId] ?? { x: 0, y: 0 }
+            next[childId] = { x: cp.x + deltaX, y: cp.y + deltaY }
+          }
+        }
+        return next
+      })
+    } else {
+      setPositions((prev) => ({ ...prev, [drag.itemId]: { x, y } }))
+    }
   }
 
   function handlePointerUp() {
@@ -545,8 +630,16 @@ export default function WorkspaceCanvas({
       }
       setStackTargetId(null)
     } else {
-      const pos = positions[drag.itemId]
-      if (pos) scheduleSave(drag.itemId, pos.x, pos.y)
+      const stackChildren = stackGroups.get(drag.itemId)
+      if (stackChildren && stackChildren.length > 1) {
+        for (const cid of stackChildren) {
+          const p = positions[cid]
+          if (p) scheduleSave(cid, p.x, p.y)
+        }
+      } else {
+        const pos = positions[drag.itemId]
+        if (pos) scheduleSave(drag.itemId, pos.x, pos.y)
+      }
     }
     dragState.current = null
   }
@@ -652,61 +745,84 @@ export default function WorkspaceCanvas({
           <button
             type="button"
             onClick={() => setLegalFilter('all')}
-            className={`rounded-lg px-2 py-0.5 font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`rounded-lg px-2.5 py-1 font-bold whitespace-nowrap transition-all cursor-pointer ${
               legalFilter === 'all' ? 'bg-white text-blue-700 shadow-xs' : 'text-slate-600 hover:text-slate-900'
             }`}
           >
-            All
+            All ({legalCounts.all})
           </button>
           <button
             type="button"
             onClick={() => setLegalFilter('exhibit')}
-            className={`flex items-center gap-1 rounded-lg px-2 py-0.5 font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center gap-1 rounded-lg px-2 py-1 font-bold whitespace-nowrap transition-all cursor-pointer ${
               legalFilter === 'exhibit' ? 'bg-amber-100 text-amber-900 border border-amber-200/80 shadow-xs' : 'text-slate-600 hover:text-amber-800'
             }`}
             title="Show Court Exhibits only"
           >
             <span>🔍</span>
             <span>Exhibits</span>
+            <span className="ml-0.5 rounded-full bg-amber-200/80 px-1.5 text-[10px] text-amber-950 font-black">
+              {legalCounts.exhibit}
+            </span>
           </button>
           <button
             type="button"
             onClick={() => setLegalFilter('issue')}
-            className={`flex items-center gap-1 rounded-lg px-2 py-0.5 font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center gap-1 rounded-lg px-2 py-1 font-bold whitespace-nowrap transition-all cursor-pointer ${
               legalFilter === 'issue' ? 'bg-purple-100 text-purple-900 border border-purple-200/80 shadow-xs' : 'text-slate-600 hover:text-purple-800'
             }`}
             title="Show Legal Issues only"
           >
             <span>⚖️</span>
             <span>Issues</span>
+            <span className="ml-0.5 rounded-full bg-purple-200/80 px-1.5 text-[10px] text-purple-950 font-black">
+              {legalCounts.issue}
+            </span>
           </button>
           <button
             type="button"
             onClick={() => setLegalFilter('precedent')}
-            className={`flex items-center gap-1 rounded-lg px-2 py-0.5 font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center gap-1 rounded-lg px-2 py-1 font-bold whitespace-nowrap transition-all cursor-pointer ${
               legalFilter === 'precedent' ? 'bg-blue-100 text-blue-900 border border-blue-200/80 shadow-xs' : 'text-slate-600 hover:text-blue-800'
             }`}
             title="Show Precedents / Case Laws only"
           >
             <span>📜</span>
             <span>Precedents</span>
+            <span className="ml-0.5 rounded-full bg-blue-200/80 px-1.5 text-[10px] text-blue-950 font-black">
+              {legalCounts.precedent}
+            </span>
           </button>
           <button
             type="button"
             onClick={() => setLegalFilter('contradiction')}
-            className={`flex items-center gap-1 rounded-lg px-2 py-0.5 font-bold whitespace-nowrap transition-all cursor-pointer ${
+            className={`flex items-center gap-1 rounded-lg px-2 py-1 font-bold whitespace-nowrap transition-all cursor-pointer ${
               legalFilter === 'contradiction' ? 'bg-rose-100 text-rose-900 border border-rose-200/80 shadow-xs' : 'text-slate-600 hover:text-rose-800'
             }`}
             title="Show Contradictions for Cross-Examination"
           >
             <span>⚠️</span>
             <span>Contradictions</span>
+            <span className="ml-0.5 rounded-full bg-rose-200/80 px-1.5 text-[10px] text-rose-950 font-black">
+              {legalCounts.contradiction}
+            </span>
           </button>
         </div>
-        <span className="h-4 w-px bg-slate-200" />
-        <span className="text-[11px] font-bold text-slate-500 whitespace-nowrap">
-          {cards.length} {cards.length === 1 ? 'card' : 'cards'}
-        </span>
+
+        {legalFilter !== 'all' && (
+          <button
+            type="button"
+            onClick={() => setHideNonMatching((h) => !h)}
+            className={`flex items-center gap-1 rounded-xl px-2 py-1 text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+              hideNonMatching
+                ? 'bg-blue-600 text-white shadow-xs'
+                : 'bg-slate-100 text-slate-700 hover:bg-slate-200 border border-slate-200'
+            }`}
+            title={hideNonMatching ? 'Only matching cards are shown (Screen is clean)' : 'Non-matching cards are dimmed'}
+          >
+            <span>{hideNonMatching ? '🎯 Focus (Filtered)' : '👁️ Show Dimmed'}</span>
+          </button>
+        )}
       </div>
 
       <div
@@ -743,6 +859,11 @@ export default function WorkspaceCanvas({
           {links.map((link) => {
             const endpoints = linkEndpoints(link)
             if (!endpoints) return null
+            if (legalFilter !== 'all' && hideNonMatching) {
+              const srcVisible = visibleCards.some((c) => c.kind === link.source_type && c.item.target_id === link.source_id)
+              const tgtVisible = visibleCards.some((c) => c.kind === link.target_type && c.item.target_id === link.target_id)
+              if (!srcVisible || !tgtVisible) return null
+            }
             return (
               <line
                 key={link.id}
@@ -758,7 +879,25 @@ export default function WorkspaceCanvas({
           })}
         </svg>
 
-        {cards.map((card) => {
+        {/* Empty filter message banner */}
+        {visibleCards.length === 0 && legalFilter !== 'all' && (
+          <div className="absolute left-1/2 top-24 -translate-x-1/2 z-20 flex flex-col items-center gap-3 rounded-2xl border border-slate-700 bg-slate-900/95 p-6 shadow-2xl text-center max-w-sm">
+            <span className="text-3xl">🔍</span>
+            <h3 className="text-sm font-bold text-slate-200">No cards tagged as "{legalFilter}"</h3>
+            <p className="text-xs text-slate-400">
+              Click <span className="text-cyan-400 font-bold">+ tag</span> on any card to tag it as {legalFilter}, or view all cards.
+            </p>
+            <button
+              type="button"
+              onClick={() => setLegalFilter('all')}
+              className="rounded-xl bg-blue-600 hover:bg-blue-500 px-4 py-1.5 text-xs font-bold text-white transition-all shadow-xs cursor-pointer"
+            >
+              Show All Cards ({cards.length})
+            </button>
+          </div>
+        )}
+
+        {visibleCards.map((card) => {
           const pos = positions[card.item.id] ?? { x: card.item.x, y: card.item.y }
           const isActive = activeCardId === card.key || activeCardId === card.item.id
           const isMagneticTarget = stackTargetId === card.item.id
@@ -767,7 +906,7 @@ export default function WorkspaceCanvas({
           const legalTag = card.tags.find((t) =>
             ['issue', 'precedent', 'exhibit', 'contradiction', 'ruling'].includes(t.name.toLowerCase())
           )?.name.toLowerCase()
-          const isDimmed = legalFilter !== 'all' && legalTag !== legalFilter
+          const isDimmed = !hideNonMatching && legalFilter !== 'all' && legalTag !== legalFilter
 
           return (
             <div
@@ -775,12 +914,12 @@ export default function WorkspaceCanvas({
               data-card-id={card.item.id}
               data-target-id={card.targetId}
               data-card-kind={card.kind}
-              className={`absolute flex cursor-grab flex-col gap-1 rounded-md border bg-slate-900 p-3 active:cursor-grabbing transition-all ${
+              className={`absolute flex cursor-grab flex-col gap-2 rounded-2xl border bg-white p-3.5 active:cursor-grabbing transition-all text-slate-900 ${
                 isMagneticTarget
-                  ? 'ring-4 ring-indigo-400 bg-indigo-950/70 scale-[1.04] shadow-[0_0_30px_rgba(99,102,241,0.5)] z-30'
+                  ? 'ring-4 ring-indigo-500 bg-indigo-50/90 scale-[1.04] shadow-[0_0_30px_rgba(99,102,241,0.25)] z-30'
                   : isActive
-                  ? 'ring-2 ring-cyan-400 shadow-2xl z-20'
-                  : 'border-slate-700 hover:border-slate-600 shadow-lg'
+                  ? 'ring-2 ring-blue-600 shadow-xl z-20 border-blue-400'
+                  : 'border-slate-200/90 hover:border-slate-300 shadow-[0_4px_16px_rgba(15,23,42,0.06)] hover:shadow-[0_8px_24px_rgba(15,23,42,0.1)]'
               }`}
               style={{
                 left: pos.x,
@@ -789,19 +928,19 @@ export default function WorkspaceCanvas({
                 minHeight: card.item.height,
                 borderLeftColor:
                   legalTag === 'issue'
-                    ? '#c084fc'
+                    ? '#7c3aed'
                     : legalTag === 'precedent'
-                    ? '#60a5fa'
+                    ? '#2563eb'
                     : legalTag === 'exhibit'
-                    ? '#fbbf24'
+                    ? '#d97706'
                     : legalTag === 'contradiction'
-                    ? '#f87171'
-                    : card.accentColor,
+                    ? '#dc2626'
+                    : card.accentColor || '#2563eb',
                 borderLeftWidth: '5px',
-                borderColor: isMagneticTarget ? '#818cf8' : isActive ? card.accentColor : undefined,
+                borderColor: isMagneticTarget ? '#818cf8' : isActive ? '#2563eb' : undefined,
                 opacity: isDimmed ? 0.25 : 1,
                 boxShadow: isStackHead
-                  ? '4px 4px 0px rgba(30, 41, 59, 0.9), 8px 8px 0px rgba(15, 23, 42, 0.7)'
+                  ? '4px 4px 0px rgba(226, 232, 240, 0.9), 8px 8px 0px rgba(203, 213, 225, 0.7)'
                   : undefined,
               }}
               onPointerDown={(e) => handlePointerDown(e, card.item.id)}
@@ -812,25 +951,25 @@ export default function WorkspaceCanvas({
             >
               {/* Advocate Legal Stamp Banner */}
               {legalTag === 'issue' && (
-                <div className="mb-0.5 flex items-center gap-1 rounded bg-purple-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-purple-300 border border-purple-500/30">
+                <div className="mb-0.5 flex items-center gap-1.5 rounded-lg bg-purple-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-purple-900 border border-purple-200">
                   <span>⚖️</span>
                   <span>LEGAL ISSUE / QUESTION</span>
                 </div>
               )}
               {legalTag === 'precedent' && (
-                <div className="mb-0.5 flex items-center gap-1 rounded bg-blue-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-blue-300 border border-blue-500/30">
+                <div className="mb-0.5 flex items-center gap-1.5 rounded-lg bg-blue-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-blue-900 border border-blue-200">
                   <span>📜</span>
                   <span>PRECEDENT / CITATION</span>
                 </div>
               )}
               {legalTag === 'exhibit' && (
-                <div className="mb-0.5 flex items-center gap-1 rounded bg-amber-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-amber-300 border border-amber-500/30">
+                <div className="mb-0.5 flex items-center gap-1.5 rounded-lg bg-amber-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-amber-950 border border-amber-200">
                   <span>🔍</span>
                   <span>COURT EXHIBIT</span>
                 </div>
               )}
               {legalTag === 'contradiction' && (
-                <div className="mb-0.5 flex items-center gap-1 rounded bg-rose-500/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-rose-300 border border-rose-500/30">
+                <div className="mb-0.5 flex items-center gap-1.5 rounded-lg bg-rose-50 px-2 py-0.5 text-[10px] font-black uppercase tracking-wider text-rose-900 border border-rose-200">
                   <span>⚠️</span>
                   <span>CONTRADICTION</span>
                 </div>
@@ -841,8 +980,8 @@ export default function WorkspaceCanvas({
                   <span
                     className={
                       card.kind === 'excerpt'
-                        ? 'w-fit rounded bg-amber-400/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-amber-300'
-                        : 'w-fit rounded bg-cyan-400/20 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-cyan-300'
+                        ? 'w-fit rounded-md bg-amber-50 border border-amber-200/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-900 shadow-2xs'
+                        : 'w-fit rounded-md bg-sky-50 border border-sky-200/90 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-sky-900 shadow-2xs'
                     }
                   >
                     {card.kind === 'excerpt' ? card.title : 'Note'}
@@ -859,79 +998,106 @@ export default function WorkspaceCanvas({
                         e.stopPropagation()
                         setExpandedStackCardId(card.item.id)
                       }}
-                      className="flex items-center gap-1 rounded bg-indigo-500/30 px-1.5 py-0.5 text-[10px] font-bold text-indigo-300 transition-colors hover:bg-indigo-500/40"
+                      className="flex items-center gap-1 rounded-md bg-indigo-50 border border-indigo-200 px-1.5 py-0.5 text-[10px] font-bold text-indigo-700 transition-colors hover:bg-indigo-100"
                       title="Click to view all cards in this stack"
                     >
                       <span>📚 Stack ({stackItems!.length})</span>
                     </button>
                   )}
                 </div>
-                {card.kind === 'excerpt' && (
-                  <div className="flex items-center gap-1">
-                    <button
-                      type="button"
-                      className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-slate-300 transition-colors hover:bg-slate-800 hover:text-cyan-300"
-                      onPointerDown={(e) => e.stopPropagation()}
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        const exc = excerpts.find((x) => x.id === card.targetId)
-                        if (!exc) return
-                        const doc = documents?.find((d) => d.id === exc.document_id)
-                        const docName = doc ? ` (${doc.original_filename})` : ''
-                        const citationText = `"${exc.text.trim()}" — Page ${exc.page_number}${docName}, ChandakText Court Brief`
-                        navigator.clipboard.writeText(citationText)
-                        setCopiedCardId(card.key)
-                        setTimeout(() => setCopiedCardId(null), 1800)
-                      }}
-                      title="1-Tap Court Citation Copier: formatted quote with document and page citation for court submissions"
-                    >
-                      {copiedCardId === card.key ? '✓ Copied' : '📋 Quote'}
-                    </button>
-                    {onNavigateToSource && (
+                <div className="flex items-center gap-1">
+                  {card.kind === 'excerpt' && (
+                    <>
                       <button
                         type="button"
-                        className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-amber-400/80 transition-colors hover:bg-amber-400/10 hover:text-amber-300"
+                        className="flex items-center gap-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200/90 px-2 py-0.5 text-[10px] font-bold text-slate-700 transition-colors shadow-2xs cursor-pointer"
                         onPointerDown={(e) => e.stopPropagation()}
                         onClick={(e) => {
                           e.stopPropagation()
                           const exc = excerpts.find((x) => x.id === card.targetId)
-                          if (exc) onNavigateToSource(exc)
+                          if (!exc) return
+                          const doc = documents?.find((d) => d.id === exc.document_id)
+                          const docName = doc ? ` (${doc.original_filename})` : ''
+                          const deepUrl = `${window.location.origin}/projects/${projectId}?card=${card.item.id}`
+                          const citationText = `"${exc.text.trim()}" — Page ${exc.page_number}${docName}\nDeep Link: ${deepUrl}`
+                          navigator.clipboard.writeText(citationText)
+                          setCopiedCardId(card.key)
+                          setTimeout(() => setCopiedCardId(null), 1800)
                         }}
-                        title="Jump to source page in PDF reader"
+                        title="1-Tap Court Citation Copier: formatted quote with document, page citation, and deep link"
                       >
-                        ↗ View in Doc
+                        {copiedCardId === card.key ? '✓ Copied' : '📋 Quote'}
                       </button>
-                    )}
-                  </div>
-                )}
-                {card.kind === 'note' && (
+                      <button
+                        type="button"
+                        className="flex items-center gap-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-300 px-1.5 py-0.5 text-[10px] font-bold text-slate-700 transition-colors shadow-2xs cursor-pointer"
+                        onPointerDown={(e) => e.stopPropagation()}
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          const deepUrl = `${window.location.origin}/projects/${projectId}?card=${card.item.id}`
+                          navigator.clipboard.writeText(deepUrl)
+                          setCopiedCardId(card.key + '-link')
+                          setTimeout(() => setCopiedCardId(null), 1800)
+                        }}
+                        title="Copy Deep Link to this card (LiquidText Lesson 9)"
+                      >
+                        {copiedCardId === card.key + '-link' ? '✓ Copied' : '🔗 Link'}
+                      </button>
+                      {onNavigateToSource && (
+                        <button
+                          type="button"
+                          className="flex items-center gap-1 rounded-md bg-blue-50 hover:bg-blue-100 border border-blue-200 px-2 py-0.5 text-[10px] font-bold text-blue-700 transition-colors shadow-2xs cursor-pointer"
+                          onPointerDown={(e) => e.stopPropagation()}
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            const exc = excerpts.find((x) => x.id === card.targetId)
+                            if (exc) onNavigateToSource(exc)
+                          }}
+                          title="Jump to source page in PDF reader"
+                        >
+                          ↗ View in Doc
+                        </button>
+                      )}
+                    </>
+                  )}
+                  {card.kind === 'note' && (
+                    <button
+                      type="button"
+                      className="flex items-center gap-1 rounded-md bg-slate-100 hover:bg-slate-200 border border-slate-200/90 px-2 py-0.5 text-[10px] font-bold text-slate-700 transition-colors shadow-2xs cursor-pointer"
+                      onPointerDown={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handleStartEditNote(card)
+                      }}
+                      title="Edit text and styling"
+                    >
+                      ✎ Edit
+                    </button>
+                  )}
                   <button
                     type="button"
-                    className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-cyan-400/80 transition-colors hover:bg-cyan-400/10 hover:text-cyan-300"
+                    className="flex items-center justify-center rounded-md p-1 text-[11px] text-slate-400 hover:bg-rose-50 hover:text-rose-600 transition-colors cursor-pointer"
                     onPointerDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation()
-                      handleStartEditNote(card)
-                    }}
-                    title="Edit text and styling"
+                    onClick={(e) => handleDeleteCard(card, e)}
+                    title="Delete card from canvas"
                   >
-                    ✎ Edit
+                    🗑️
                   </button>
-                )}
+                </div>
               </div>
 
               {editingCardId === card.targetId ? (
                 <div
-                  className="mt-1 flex flex-col gap-2 rounded border border-slate-700 bg-slate-950 p-2"
+                  className="mt-1 flex flex-col gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5 shadow-xs"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => e.stopPropagation()}
                 >
                   {/* Rich Styling Toolbar */}
-                  <div className="flex flex-wrap items-center gap-1 border-b border-slate-800 pb-1.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-1 border-b border-slate-200 pb-1.5 text-xs">
                     <button
                       type="button"
-                      className={`h-6 w-6 rounded font-bold transition-colors ${
-                        editBold ? 'bg-cyan-500/30 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+                      className={`h-6 w-6 rounded font-bold transition-colors cursor-pointer ${
+                        editBold ? 'bg-blue-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
                       onClick={() => setEditBold((b) => !b)}
                       title="Bold"
@@ -940,8 +1106,8 @@ export default function WorkspaceCanvas({
                     </button>
                     <button
                       type="button"
-                      className={`h-6 w-6 rounded font-serif italic transition-colors ${
-                        editItalic ? 'bg-cyan-500/30 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+                      className={`h-6 w-6 rounded font-serif italic transition-colors cursor-pointer ${
+                        editItalic ? 'bg-blue-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
                       onClick={() => setEditItalic((i) => !i)}
                       title="Italic"
@@ -950,19 +1116,19 @@ export default function WorkspaceCanvas({
                     </button>
                     <button
                       type="button"
-                      className={`h-6 w-6 rounded underline transition-colors ${
-                        editUnderline ? 'bg-cyan-500/30 text-cyan-300' : 'text-slate-400 hover:text-slate-200'
+                      className={`h-6 w-6 rounded underline transition-colors cursor-pointer ${
+                        editUnderline ? 'bg-blue-600 text-white shadow-xs' : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-100'
                       }`}
                       onClick={() => setEditUnderline((u) => !u)}
                       title="Underline"
                     >
                       U
                     </button>
-                    <span className="h-4 w-px bg-slate-800" />
+                    <span className="h-4 w-px bg-slate-200" />
                     <button
                       type="button"
-                      className={`rounded px-1.5 py-0.5 text-[10px] ${
-                        editFontSize === 'sm' ? 'bg-slate-700 text-white' : 'text-slate-400'
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-bold cursor-pointer ${
+                        editFontSize === 'sm' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-700'
                       }`}
                       onClick={() => setEditFontSize('sm')}
                     >
@@ -970,8 +1136,8 @@ export default function WorkspaceCanvas({
                     </button>
                     <button
                       type="button"
-                      className={`rounded px-1.5 py-0.5 text-[10px] ${
-                        editFontSize === 'base' ? 'bg-slate-700 text-white' : 'text-slate-400'
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-bold cursor-pointer ${
+                        editFontSize === 'base' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-700'
                       }`}
                       onClick={() => setEditFontSize('base')}
                     >
@@ -979,19 +1145,21 @@ export default function WorkspaceCanvas({
                     </button>
                     <button
                       type="button"
-                      className={`rounded px-1.5 py-0.5 text-[10px] ${
-                        editFontSize === 'lg' ? 'bg-slate-700 text-white' : 'text-slate-400'
+                      className={`rounded px-1.5 py-0.5 text-[10px] font-bold cursor-pointer ${
+                        editFontSize === 'lg' ? 'bg-slate-800 text-white' : 'bg-white border border-slate-200 text-slate-700'
                       }`}
                       onClick={() => setEditFontSize('lg')}
                     >
                       L
                     </button>
-                    <span className="h-4 w-px bg-slate-800" />
-                    {['#f8fafc', '#38bdf8', '#facc15', '#4ade80', '#f472b6'].map((color) => (
+                    <span className="h-4 w-px bg-slate-200" />
+                    {['#0f172a', '#1e3a8a', '#b45309', '#047857', '#b91c1c'].map((color) => (
                       <button
                         key={color}
                         type="button"
-                        className="h-3.5 w-3.5 rounded-full border border-slate-600 transition-transform hover:scale-125"
+                        className={`h-4 w-4 rounded-full border transition-transform hover:scale-125 cursor-pointer ${
+                          editColor === color ? 'ring-2 ring-blue-500 scale-110' : 'border-slate-300'
+                        }`}
                         style={{ backgroundColor: color }}
                         onClick={() => setEditColor(color)}
                       />
@@ -1002,12 +1170,12 @@ export default function WorkspaceCanvas({
                     rows={3}
                     value={editBody}
                     onChange={(e) => setEditBody(e.target.value)}
-                    className="w-full rounded border border-slate-700 bg-slate-900 p-2 text-slate-100 placeholder:text-slate-500 focus:border-cyan-500 focus:outline-none"
+                    className="w-full rounded-lg border border-slate-300 bg-white p-2 text-slate-900 placeholder:text-slate-400 focus:border-blue-600 focus:outline-none text-xs"
                     style={{
                       fontWeight: editBold ? 'bold' : 'normal',
                       fontStyle: editItalic ? 'italic' : 'normal',
                       textDecoration: editUnderline ? 'underline' : 'none',
-                      fontSize: editFontSize === 'sm' ? '12px' : editFontSize === 'lg' ? '16px' : '14px',
+                      fontSize: editFontSize === 'sm' ? '12px' : editFontSize === 'lg' ? '16px' : '13.5px',
                       color: editColor,
                     }}
                     autoFocus
@@ -1016,14 +1184,14 @@ export default function WorkspaceCanvas({
                   <div className="flex items-center justify-end gap-1.5">
                     <button
                       type="button"
-                      className="rounded px-2 py-1 text-xs text-slate-400 hover:text-slate-200"
+                      className="rounded-lg px-2.5 py-1 text-xs font-semibold text-slate-600 hover:bg-slate-200 transition-colors cursor-pointer"
                       onClick={() => setEditingCardId(null)}
                     >
                       Cancel
                     </button>
                     <button
                       type="button"
-                      className="rounded bg-cyan-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-cyan-500"
+                      className="rounded-lg bg-blue-600 px-3 py-1 text-xs font-bold text-white hover:bg-blue-700 shadow-2xs transition-colors cursor-pointer"
                       onClick={() => handleSaveNoteEdit(card.targetId)}
                     >
                       Save
@@ -1032,7 +1200,7 @@ export default function WorkspaceCanvas({
                 </div>
               ) : (
                 <div
-                  className="cursor-text py-0.5"
+                  className="cursor-text py-1 px-0.5 rounded-lg hover:bg-slate-50/70 transition-colors"
                   onDoubleClick={(e) => {
                     if (card.kind === 'note') {
                       e.stopPropagation()
@@ -1044,19 +1212,22 @@ export default function WorkspaceCanvas({
                 </div>
               )}
 
-              <div className="mt-1 flex flex-wrap items-center gap-1">
+              <div className="mt-2 flex flex-wrap items-center gap-1 border-t border-slate-100 pt-2">
                 {card.tags.map((tag) => (
                   <span
                     key={tag.id}
-                    className="rounded-full px-1.5 py-0.5 text-[10px] font-medium text-slate-950"
-                    style={{ backgroundColor: tagColor(tag) }}
+                    className="rounded-md border border-slate-200/90 bg-slate-50 px-2 py-0.5 text-[10px] font-bold text-slate-800 shadow-2xs"
+                    style={{
+                      borderLeftColor: tagColor(tag),
+                      borderLeftWidth: '3px',
+                    }}
                   >
                     {tag.name}
                   </span>
                 ))}
                 <button
                   type="button"
-                  className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-accent hover:text-accent"
+                  className="rounded-md border border-dashed border-slate-300 bg-slate-50 hover:bg-slate-100 hover:border-slate-400 px-2 py-0.5 text-[10px] font-bold text-slate-700 transition-colors cursor-pointer shadow-2xs"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
                     e.stopPropagation()
@@ -1067,7 +1238,7 @@ export default function WorkspaceCanvas({
                 </button>
                 <button
                   type="button"
-                  className="rounded-full border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:border-accent hover:text-accent disabled:opacity-50"
+                  className="rounded-md border border-indigo-200 bg-indigo-50 hover:bg-indigo-100 px-2 py-0.5 text-[10px] font-bold text-indigo-700 transition-colors cursor-pointer shadow-2xs disabled:opacity-50"
                   disabled={suggestExcerptTags.isPending || suggestNoteTags.isPending}
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => {
@@ -1081,7 +1252,7 @@ export default function WorkspaceCanvas({
 
               {suggestionsFor?.cardKey === card.key && (
                 <div
-                  className="mt-1 flex flex-wrap items-center gap-1 rounded-md border border-slate-700 bg-slate-950 p-1.5"
+                  className="mt-1 flex flex-wrap items-center gap-1 rounded-xl border border-slate-200 bg-slate-50 p-2 shadow-xs"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => e.stopPropagation()}
                 >
@@ -1092,7 +1263,7 @@ export default function WorkspaceCanvas({
                       <button
                         key={name}
                         type="button"
-                        className="rounded-full bg-slate-800 px-1.5 py-0.5 text-[10px] text-slate-200 hover:bg-slate-700"
+                        className="rounded-md bg-white border border-slate-200 px-2 py-0.5 text-[10px] font-bold text-slate-800 hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-colors cursor-pointer"
                         onClick={() => acceptSuggestion(card, name)}
                       >
                         + {name}
@@ -1101,7 +1272,7 @@ export default function WorkspaceCanvas({
                   )}
                   <button
                     type="button"
-                    className="ml-auto text-[10px] text-slate-500 hover:underline"
+                    className="ml-auto text-[10px] text-slate-500 hover:underline cursor-pointer"
                     onClick={() => setSuggestionsFor(null)}
                   >
                     dismiss
@@ -1111,33 +1282,68 @@ export default function WorkspaceCanvas({
 
               {tagMenuFor === card.key && (
                 <div
-                  className="absolute left-0 top-full z-10 mt-1 w-48 rounded-md border border-slate-700 bg-slate-800 p-2 shadow-xl"
+                  className="absolute left-0 top-full z-30 mt-1.5 w-60 rounded-xl border border-slate-700 bg-slate-900/98 p-2.5 shadow-2xl backdrop-blur-md"
                   onPointerDown={(e) => e.stopPropagation()}
                   onClick={(e) => e.stopPropagation()}
                 >
-                  {tags.length === 0 && (
-                    <p className="px-1 py-1 text-xs text-slate-500">No tags yet - add one in the sidebar.</p>
+                  {/* Quick Legal Tag Categories */}
+                  <div className="mb-2 border-b border-slate-800 pb-2">
+                    <p className="mb-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                      Legal Categories
+                    </p>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {LEGAL_TAG_DEFS.map((def) => {
+                        const hasTag = card.tags.some((t) => t.name.toLowerCase() === def.name)
+                        return (
+                          <button
+                            key={def.name}
+                            type="button"
+                            onClick={() => handleQuickTag(card, def.name)}
+                            className={`flex items-center gap-1.5 rounded-lg px-2 py-1 text-[11px] font-semibold transition-all cursor-pointer ${
+                              hasTag
+                                ? 'bg-blue-600 text-white shadow-xs ring-1 ring-blue-400'
+                                : 'bg-slate-800 text-slate-200 hover:bg-slate-700 border border-slate-700'
+                            }`}
+                          >
+                            <span>{def.icon}</span>
+                            <span>{def.label}</span>
+                            {hasTag && <span className="ml-auto text-[10px] font-black">✓</span>}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
+                  <p className="mb-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    Custom Tags
+                  </p>
+                  {tags.filter((t) => !['issue', 'precedent', 'exhibit', 'contradiction', 'ruling'].includes(t.name.toLowerCase())).length === 0 && (
+                    <p className="px-1 py-0.5 text-[11px] text-slate-500">No custom tags yet.</p>
                   )}
-                  {tags.map((tag) => {
-                    const checked = card.tags.some((t) => t.id === tag.id)
-                    return (
-                      <label
-                        key={tag.id}
-                        className="flex cursor-pointer items-center gap-2 rounded px-1 py-1 text-xs text-slate-200 hover:bg-slate-700"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => toggleTag(card, tag)}
-                        />
-                        <span
-                          className="h-2 w-2 rounded-full"
-                          style={{ backgroundColor: tagColor(tag) }}
-                        />
-                        {tag.name}
-                      </label>
-                    )
-                  })}
+                  <div className="max-h-36 overflow-y-auto space-y-0.5">
+                    {tags
+                      .filter((t) => !['issue', 'precedent', 'exhibit', 'contradiction', 'ruling'].includes(t.name.toLowerCase()))
+                      .map((tag) => {
+                        const checked = card.tags.some((t) => t.id === tag.id)
+                        return (
+                          <label
+                            key={tag.id}
+                            className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-slate-200 hover:bg-slate-800"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              onChange={() => toggleTag(card, tag)}
+                            />
+                            <span
+                              className="h-2 w-2 rounded-full"
+                              style={{ backgroundColor: tagColor(tag) }}
+                            />
+                            <span className="truncate">{tag.name}</span>
+                          </label>
+                        )
+                      })}
+                  </div>
                 </div>
               )}
             </div>

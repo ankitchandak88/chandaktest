@@ -38,7 +38,7 @@ export default function AppShell() {
 
   return (
     <div className="flex min-h-full flex-col bg-slate-50 text-slate-900">
-      <header className="sticky top-0 z-40 flex items-center justify-between border-b border-slate-200/80 bg-white/95 px-6 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.03)] backdrop-blur-md">
+      <header className="main-app-header sticky top-0 z-40 flex items-center justify-between border-b border-slate-200/80 bg-white/95 px-6 py-2.5 shadow-[0_1px_3px_rgba(0,0,0,0.03)] backdrop-blur-md">
         <Link to="/" className="flex items-center gap-2.5 group">
           <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-blue-600 to-indigo-700 text-white shadow-sm font-bold text-base transition-transform group-hover:scale-105">
             ⚖️

@@ -11,12 +11,14 @@ import type {
   OrganizationDetails,
   OrganizationMember,
   Paginated,
+  PhraseDefinition,
   Plan,
   Project,
   ProjectShare,
   SearchResults,
   Tag,
   UsageSummary,
+  Workspace,
   WorkspaceItem,
 } from '@/types/api'
 
@@ -290,22 +292,129 @@ export function useSyncNoteTags(projectId: string | undefined) {
   })
 }
 
-export function useWorkspaceItems(projectId: string | undefined) {
+export function usePhraseDefinitions(projectId: string | undefined) {
   return useQuery({
-    queryKey: ['projects', projectId, 'workspace-items'],
+    queryKey: ['projects', projectId, 'phrase-definitions'],
     queryFn: async () =>
-      (await api.get<{ data: WorkspaceItem[] }>(`/projects/${projectId}/workspace-items`)).data.data,
+      (await api.get<{ data: PhraseDefinition[] }>(`/projects/${projectId}/phrase-definitions`)).data.data,
     enabled: !!projectId,
   })
 }
 
-export function useSaveWorkspaceBatch(projectId: string | undefined) {
+export function useCreatePhraseDefinition(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: {
+      document_id?: string | null
+      term: string
+      definition: string
+      page_number?: number | null
+      source_rects?: any
+    }) =>
+      (
+        await api.post<{ data: PhraseDefinition }>(
+          `/projects/${projectId}/phrase-definitions`,
+          payload,
+        )
+      ).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'phrase-definitions'] })
+    },
+  })
+}
+
+export function useDeletePhraseDefinition(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (id: string) =>
+      (await api.delete(`/phrase-definitions/${id}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'phrase-definitions'] })
+    },
+  })
+}
+
+export function useExtractDefinitions(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (documentId: string) =>
+      (await api.post<{ data: PhraseDefinition[]; message: string }>(`/documents/${documentId}/extract-definitions`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'phrase-definitions'] })
+    },
+  })
+}
+
+export function useWorkspaces(projectId: string | undefined) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'workspaces'],
+    queryFn: async () =>
+      (await api.get<{ data: Workspace[] }>(`/projects/${projectId}/workspaces`)).data.data,
+    enabled: !!projectId,
+  })
+}
+
+export function useCreateWorkspace(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (payload: { name: string; color?: string }) =>
+      (await api.post<{ data: Workspace }>(`/projects/${projectId}/workspaces`, payload)).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspaces'] })
+    },
+  })
+}
+
+export function useUpdateWorkspace(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({
+      workspaceId,
+      data,
+    }: {
+      workspaceId: string
+      data: Partial<Pick<Workspace, 'name' | 'color' | 'order_index'>>
+    }) =>
+      (await api.patch<{ data: Workspace }>(`/workspaces/${workspaceId}`, data)).data.data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspaces'] })
+    },
+  })
+}
+
+export function useDeleteWorkspace(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (workspaceId: string) =>
+      (await api.delete<{ data: { message: string } }>(`/workspaces/${workspaceId}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspaces'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspace-items'] })
+    },
+  })
+}
+
+export function useWorkspaceItems(projectId: string | undefined, workspaceId?: string | null) {
+  return useQuery({
+    queryKey: ['projects', projectId, 'workspace-items', workspaceId ?? 'all'],
+    queryFn: async () => {
+      const url = workspaceId
+        ? `/projects/${projectId}/workspace-items?workspace_id=${workspaceId}`
+        : `/projects/${projectId}/workspace-items`
+      return (await api.get<{ data: WorkspaceItem[] }>(url)).data.data
+    },
+    enabled: !!projectId,
+  })
+}
+
+export function useSaveWorkspaceBatch(projectId: string | undefined, workspaceId?: string | null) {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async (
       items: Array<{
         id?: string
+        workspace_id?: string
         item_type?: 'excerpt' | 'note'
         target_id?: string
         x: number
@@ -316,11 +425,46 @@ export function useSaveWorkspaceBatch(projectId: string | undefined) {
     ) =>
       (
         await api.post<{ data: WorkspaceItem[] }>(`/projects/${projectId}/workspace-items/batch`, {
+          workspace_id: workspaceId,
           items,
         })
       ).data.data,
-    onSuccess: () =>
-      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspace-items'] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspace-items'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspaces'] })
+    },
+  })
+}
+
+export function useDeleteWorkspaceItem(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (itemId: string) => (await api.delete(`/workspace-items/${itemId}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspace-items'] })
+    },
+  })
+}
+
+export function useDeleteNote(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (noteId: string) => (await api.delete(`/notes/${noteId}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'notes'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspace-items'] })
+    },
+  })
+}
+
+export function useDeleteExcerpt(projectId: string | undefined) {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (excerptId: string) => (await api.delete(`/excerpts/${excerptId}`)).data,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'excerpts'] })
+      queryClient.invalidateQueries({ queryKey: ['projects', projectId, 'workspace-items'] })
+    },
   })
 }
 

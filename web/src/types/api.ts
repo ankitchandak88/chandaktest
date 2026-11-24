@@ -93,9 +93,33 @@ export interface Note {
   updated_at: string
 }
 
+export interface Workspace {
+  id: string
+  project_id: string
+  name: string
+  color: string | null
+  order_index: number
+  items_count?: number
+  created_at: string
+  updated_at: string
+}
+
+export interface PhraseDefinition {
+  id: string
+  project_id: string
+  document_id?: string | null
+  term: string
+  definition: string
+  page_number?: number | null
+  source_rects?: SourceRect[] | null
+  created_at: string
+  updated_at: string
+}
+
 export interface WorkspaceItem {
   id: string
   project_id: string
+  workspace_id?: string | null
   item_type: 'excerpt' | 'note'
   target_id: string
   x: number

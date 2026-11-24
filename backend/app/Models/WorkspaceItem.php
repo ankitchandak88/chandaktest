@@ -12,7 +12,7 @@ class WorkspaceItem extends Model
     use HasFactory, HasUuids;
 
     protected $fillable = [
-        'project_id', 'item_type', 'target_id', 'x', 'y', 'width', 'height', 'z_index',
+        'project_id', 'workspace_id', 'item_type', 'target_id', 'x', 'y', 'width', 'height', 'z_index',
     ];
 
     protected $casts = [
@@ -26,6 +26,11 @@ class WorkspaceItem extends Model
     public function project(): BelongsTo
     {
         return $this->belongsTo(Project::class);
+    }
+
+    public function workspace(): BelongsTo
+    {
+        return $this->belongsTo(Workspace::class);
     }
 
     /** Resolve the underlying excerpt or note this canvas item represents. */

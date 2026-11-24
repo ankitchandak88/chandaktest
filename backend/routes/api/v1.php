@@ -10,11 +10,13 @@ use App\Http\Controllers\Api\V1\ExportController;
 use App\Http\Controllers\Api\V1\LinkController;
 use App\Http\Controllers\Api\V1\NoteController;
 use App\Http\Controllers\Api\V1\OrganizationController;
+use App\Http\Controllers\Api\V1\PhraseDefinitionController;
 use App\Http\Controllers\Api\V1\ProjectController;
 use App\Http\Controllers\Api\V1\ProjectShareController;
 use App\Http\Controllers\Api\V1\SearchController;
 use App\Http\Controllers\Api\V1\TagController;
 use App\Http\Controllers\Api\V1\UsageController;
+use App\Http\Controllers\Api\V1\WorkspaceController;
 use App\Http\Controllers\Api\V1\WorkspaceItemController;
 use Illuminate\Support\Facades\Route;
 
@@ -113,6 +115,11 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::post('/projects/{project}/shares', [ProjectShareController::class, 'store']);
     Route::delete('/shares/{share}', [ProjectShareController::class, 'destroy']);
 
+    Route::get('/projects/{project}/workspaces', [WorkspaceController::class, 'index']);
+    Route::post('/projects/{project}/workspaces', [WorkspaceController::class, 'store']);
+    Route::patch('/workspaces/{workspace}', [WorkspaceController::class, 'update']);
+    Route::delete('/workspaces/{workspace}', [WorkspaceController::class, 'destroy']);
+
     Route::get('/projects/{project}/workspace-items', [WorkspaceItemController::class, 'index']);
     Route::post('/projects/{project}/workspace-items', [WorkspaceItemController::class, 'store']);
     Route::post('/projects/{project}/workspace-items/batch', [WorkspaceItemController::class, 'batch']);
@@ -122,6 +129,11 @@ Route::middleware(['auth:sanctum', 'org'])->group(function () {
     Route::get('/projects/{project}/links', [LinkController::class, 'index']);
     Route::post('/projects/{project}/links', [LinkController::class, 'store']);
     Route::delete('/links/{link}', [LinkController::class, 'destroy']);
+
+    Route::get('/projects/{project}/phrase-definitions', [PhraseDefinitionController::class, 'index']);
+    Route::post('/projects/{project}/phrase-definitions', [PhraseDefinitionController::class, 'store']);
+    Route::post('/documents/{document}/extract-definitions', [PhraseDefinitionController::class, 'extract']);
+    Route::delete('/phrase-definitions/{phraseDefinition}', [PhraseDefinitionController::class, 'destroy']);
 
     Route::get('/search', [SearchController::class, 'index'])->middleware('throttle:search');
 

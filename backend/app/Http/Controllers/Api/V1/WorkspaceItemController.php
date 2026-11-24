@@ -14,7 +14,13 @@ class WorkspaceItemController extends Controller
     {
         $this->authorize('view', $project);
 
-        return response()->json(['data' => $project->workspaceItems()->get()]);
+        $query = $project->workspaceItems();
+
+        if ($request->has('workspace_id')) {
+            $query->where('workspace_id', $request->query('workspace_id'));
+        }
+
+        return response()->json(['data' => $query->get()]);
     }
 
     public function store(Request $request, Project $project)
@@ -23,9 +29,21 @@ class WorkspaceItemController extends Controller
 
         $data = $this->validatedItem($request);
 
+        $workspaceId = $data['workspace_id'] ?? null;
+        if (! $workspaceId) {
+            $workspaceId = $project->workspaces()->first()?->id;
+        }
+
         $item = WorkspaceItem::create([
             'project_id' => $project->id,
-            ...$data,
+            'workspace_id' => $workspaceId,
+            'item_type' => $data['item_type'],
+            'target_id' => $data['target_id'],
+            'x' => $data['x'],
+            'y' => $data['y'],
+            'width' => $data['width'] ?? 240,
+            'height' => $data['height'] ?? 160,
+            'z_index' => $data['z_index'] ?? 0,
         ]);
 
         return response()->json(['data' => $item], 201);
@@ -68,8 +86,10 @@ class WorkspaceItemController extends Controller
         $this->authorize('update', $project);
 
         $data = $request->validate([
+            'workspace_id' => ['nullable', 'uuid'],
             'items' => ['required', 'array', 'max:200'],
             'items.*.id' => ['nullable', 'uuid'],
+            'items.*.workspace_id' => ['nullable', 'uuid'],
             'items.*.item_type' => ['required_without:items.*.id', 'in:excerpt,note'],
             'items.*.target_id' => ['required_without:items.*.id', 'uuid'],
             'items.*.x' => ['required', 'numeric'],
@@ -79,16 +99,22 @@ class WorkspaceItemController extends Controller
             'items.*.z_index' => ['sometimes', 'integer'],
         ]);
 
-        $saved = DB::transaction(function () use ($data, $project) {
+        $defaultWorkspaceId = $data['workspace_id'] ?? $project->workspaces()->first()?->id;
+
+        $saved = DB::transaction(function () use ($data, $project, $defaultWorkspaceId) {
             $results = [];
 
             foreach ($data['items'] as $itemData) {
                 $attributes = collect($itemData)->only(['x', 'y', 'width', 'height', 'z_index'])->toArray();
+                $itemWorkspaceId = $itemData['workspace_id'] ?? $defaultWorkspaceId;
 
                 if (! empty($itemData['id'])) {
                     $item = $project->workspaceItems()->whereKey($itemData['id'])->first();
 
                     if ($item) {
+                        if ($itemWorkspaceId && ! $item->workspace_id) {
+                            $attributes['workspace_id'] = $itemWorkspaceId;
+                        }
                         $item->update($attributes);
                         $results[] = $item;
 
@@ -99,6 +125,7 @@ class WorkspaceItemController extends Controller
                 $results[] = WorkspaceItem::updateOrCreate(
                     [
                         'project_id' => $project->id,
+                        'workspace_id' => $itemWorkspaceId,
                         'item_type' => $itemData['item_type'],
                         'target_id' => $itemData['target_id'],
                     ],
@@ -115,6 +142,7 @@ class WorkspaceItemController extends Controller
     private function validatedItem(Request $request): array
     {
         return $request->validate([
+            'workspace_id' => ['nullable', 'uuid'],
             'item_type' => ['required', 'in:excerpt,note'],
             'target_id' => ['required', 'uuid'],
             'x' => ['required', 'numeric'],

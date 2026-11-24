@@ -1,5 +1,5 @@
 import { type FormEvent, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Link as RouterLink, useParams } from 'react-router-dom'
+import { Link as RouterLink, useParams, useSearchParams } from 'react-router-dom'
 import {
   useCreateExcerpt,
   useCreateLink,
@@ -19,6 +19,7 @@ import {
   useStartExport,
   useTags,
   useUploadDocument,
+  useWorkspaces,
   useWorkspaceItems,
 } from '@/lib/queries'
 import ShareManager from '@/components/ShareManager'
@@ -28,6 +29,8 @@ import AiDocumentPanel from '@/components/AiDocumentPanel'
 import CitationEditor from '@/components/CitationEditor'
 import PdfViewer from '@/components/PdfViewer'
 import WorkspaceCanvas from '@/components/WorkspaceCanvas'
+import WorkspaceBoardTabs from '@/components/WorkspaceBoardTabs'
+import DefinedTermsGlossaryModal from '@/components/DefinedTermsGlossaryModal'
 import CaseChronologyModal from '@/components/CaseChronologyModal'
 import ChambersManagerModal from '@/components/ChambersManagerModal'
 import SubscriptionPlansModal from '@/components/SubscriptionPlansModal'
@@ -48,6 +51,11 @@ type LayoutMode = 'split' | 'doc' | 'workspace'
 
 export default function ProjectWorkspacePage() {
   const { projectId } = useParams<{ projectId: string }>()
+  const [searchParams] = useSearchParams()
+  const deepCardId = searchParams.get('card')
+  const deepDocId = searchParams.get('doc')
+  const deepPage = searchParams.get('page')
+
   const [tab, setTab] = useState<Tab>('documents')
   const [layoutMode, setLayoutMode] = useState<LayoutMode>('split')
   const [splitPercent, setSplitPercent] = useState<number>(55)
@@ -63,6 +71,7 @@ export default function ProjectWorkspacePage() {
   const [showCitationModal, setShowCitationModal] = useState<boolean>(false)
   const [showShortcutsModal, setShowShortcutsModal] = useState<boolean>(false)
   const [showChronologyModal, setShowChronologyModal] = useState<boolean>(false)
+  const [showGlossaryModal, setShowGlossaryModal] = useState<boolean>(false)
   const [showChambersModal, setShowChambersModal] = useState<boolean>(false)
   const [showPlansModal, setShowPlansModal] = useState<boolean>(false)
   const [showShredModal, setShowShredModal] = useState<boolean>(false)
@@ -171,7 +180,15 @@ export default function ProjectWorkspacePage() {
     hasNextPage: hasMoreNotes,
     isFetchingNextPage: fetchingMoreNotes,
   } = useNotes(projectId)
-  const { data: workspaceItems } = useWorkspaceItems(projectId)
+  const { data: workspaces = [] } = useWorkspaces(projectId)
+  const [selectedWorkspaceId, setSelectedWorkspaceId] = useState<string | null>(null)
+  const activeWorkspaceId = useMemo(() => {
+    if (selectedWorkspaceId && workspaces.some((w) => w.id === selectedWorkspaceId)) {
+      return selectedWorkspaceId
+    }
+    return workspaces[0]?.id ?? null
+  }, [selectedWorkspaceId, workspaces])
+  const { data: workspaceItems } = useWorkspaceItems(projectId, activeWorkspaceId)
   const { data: links } = useLinks(projectId)
   const { data: tags } = useTags(projectId)
   const createTag = useCreateTag(projectId)
@@ -183,6 +200,24 @@ export default function ProjectWorkspacePage() {
   const documents = documentPages?.pages.flatMap((page) => page.data)
   const excerpts = excerptPages?.pages.flatMap((page) => page.data)
   const notes = notePages?.pages.flatMap((page) => page.data)
+
+  // Deep link listener (LiquidText Lesson 9)
+  useEffect(() => {
+    if (deepCardId) {
+      setActiveCardId(deepCardId)
+      if (layoutMode === 'doc') setLayoutMode('split')
+    }
+  }, [deepCardId, layoutMode])
+
+  useEffect(() => {
+    if (deepDocId && documents) {
+      const match = documents.find((d) => d.id === deepDocId)
+      if (match) setActiveDocument(match)
+    }
+    if (deepPage) {
+      setFocusPage(Number(deepPage))
+    }
+  }, [deepDocId, deepPage, documents])
 
   const handleToggleVault = useCallback(() => {
     if (!projectId) return
@@ -218,7 +253,7 @@ export default function ProjectWorkspacePage() {
 
   const createExcerpt = useCreateExcerpt(projectId)
   const createNote = useCreateNote(projectId)
-  const saveBatch = useSaveWorkspaceBatch(projectId)
+  const saveBatch = useSaveWorkspaceBatch(projectId, activeWorkspaceId)
   const createLink = useCreateLink(projectId)
   const startExport = useStartExport(projectId)
 
@@ -433,7 +468,10 @@ export default function ProjectWorkspacePage() {
     }
 
     const pos = customPos ?? (await nextCanvasPosition())
-    await saveBatch.mutateAsync([{ item_type: 'excerpt', target_id: excerpt.id, ...pos }])
+    const saved = await saveBatch.mutateAsync([{ item_type: 'excerpt', target_id: excerpt.id, ...pos }])
+    if (saved && saved.length > 0) {
+      setActiveCardId(saved[0].id)
+    }
   }
 
   function handleDropExcerpt(
@@ -527,6 +565,15 @@ export default function ProjectWorkspacePage() {
     window.addEventListener('mouseup', handleMouseUp)
   }, [])
 
+  const activeExcerpt = useMemo(() => {
+    if (!activeCardId || !workspaceItems || !excerpts) return null
+    const item = workspaceItems.find((it) => it.id === activeCardId)
+    if (item?.item_type === 'excerpt') {
+      return excerpts.find((x) => x.id === item.target_id) ?? null
+    }
+    return null
+  }, [activeCardId, workspaceItems, excerpts])
+
   // LiquidText Dynamic Elastic Spring-Line Tether: recalculate live anchor points
   const updateTether = useCallback(() => {
     if (layoutMode !== 'split' || !activeCardId || !splitContainerRef.current) {
@@ -537,12 +584,6 @@ export default function ProjectWorkspacePage() {
     const containerEl = splitContainerRef.current
     const containerRect = containerEl.getBoundingClientRect()
     const cardEl = containerEl.querySelector(`[data-card-id="${activeCardId}"]`)
-
-    const activeItem = workspaceItems?.find((it) => it.id === activeCardId)
-    const activeExcerpt =
-      activeItem?.item_type === 'excerpt'
-        ? excerpts?.find((x) => x.id === activeItem.target_id)
-        : null
 
     const pageEl = activeExcerpt
       ? containerEl.querySelector(`[data-page-number="${activeExcerpt.page_number}"]`)
@@ -566,7 +607,7 @@ export default function ProjectWorkspacePage() {
     } else {
       setTetherCoords(null)
     }
-  }, [activeCardId, layoutMode, splitPercent, workspaceItems, excerpts])
+  }, [activeCardId, layoutMode, splitPercent, activeExcerpt])
 
   useEffect(() => {
     updateTether()
@@ -678,6 +719,30 @@ export default function ProjectWorkspacePage() {
     setFocusPage(pageNumber)
   }
 
+  const [isHeaderCollapsed, setIsHeaderCollapsed] = useState<boolean>(false)
+  const [showActionsDropdown, setShowActionsDropdown] = useState<boolean>(false)
+  const actionsDropdownRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (isHeaderCollapsed && activeDocument) {
+      document.body.classList.add('reader-focus-mode')
+    } else {
+      document.body.classList.remove('reader-focus-mode')
+    }
+    return () => document.body.classList.remove('reader-focus-mode')
+  }, [isHeaderCollapsed, activeDocument])
+
+  useEffect(() => {
+    if (!showActionsDropdown) return
+    function handleClickOutside(e: MouseEvent) {
+      if (actionsDropdownRef.current && !actionsDropdownRef.current.contains(e.target as Node)) {
+        setShowActionsDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [showActionsDropdown])
+
   const [exportFormat, setExportFormat] = useState<'pdf' | 'pdf_highlights' | 'docx'>('pdf')
 
   async function handleStartExport() {
@@ -722,7 +787,7 @@ export default function ProjectWorkspacePage() {
   }
 
   return (
-    <div className="flex h-[calc(100vh-56px)] flex-col bg-slate-50 text-slate-900">
+    <div className={`flex flex-col bg-slate-50 text-slate-900 ${isHeaderCollapsed && activeDocument ? 'h-screen' : 'h-[calc(100vh-56px)]'}`}>
       {/* Courtroom Jammer / Basement Zero-Internet Alert Banner */}
       {(isOffline || simulatedJammer) && (
         <div className="flex items-center justify-between bg-amber-50 border-b border-amber-200 px-5 py-2 text-xs font-semibold text-amber-900">
@@ -750,8 +815,9 @@ export default function ProjectWorkspacePage() {
         </div>
       )}
 
-      {/* Premium Executive Toolbar */}
-      <div className="flex items-center justify-between border-b border-slate-200/90 bg-white px-5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex-wrap gap-3">
+      {/* Premium Executive Toolbar - Collapsible when reading */}
+      {(!isHeaderCollapsed || !activeDocument) && (
+        <div className="flex items-center justify-between border-b border-slate-200/90 bg-white px-5 py-2.5 shadow-[0_1px_2px_rgba(0,0,0,0.03)] flex-wrap gap-3">
         {/* Left: Breadcrumbs & Matter Title */}
         <div className="flex items-center gap-3 min-w-0">
           <RouterLink
@@ -896,47 +962,60 @@ export default function ProjectWorkspacePage() {
             <span>Chambers</span>
           </button>
 
-          {/* Font Scaler (A / A+ / A++) */}
-          <div className="flex items-center gap-0.5 rounded-xl border border-slate-200 bg-slate-100 p-0.5 text-xs shadow-inner" title="Advocate Font Size: Normal (100%), Large (114%), Jumbo (128%)">
-            <button
-              type="button"
-              onClick={() => setFontSizeScale('normal')}
-              className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all cursor-pointer ${
-                fontSizeScale === 'normal'
-                  ? 'bg-white text-blue-700 shadow-xs font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Normal text size (100%)"
-            >
-              A
-            </button>
-            <button
-              type="button"
-              onClick={() => setFontSizeScale('large')}
-              className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all cursor-pointer ${
-                fontSizeScale === 'large'
-                  ? 'bg-white text-blue-700 shadow-xs font-bold'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Large font size (114% - Recommended for Advocates 48+)"
-            >
-              A+
-            </button>
-            <button
-              type="button"
-              onClick={() => setFontSizeScale('jumbo')}
-              className={`rounded-lg px-2 py-0.5 text-xs font-black transition-all cursor-pointer ${
-                fontSizeScale === 'jumbo'
-                  ? 'bg-white text-blue-700 shadow-xs font-black'
-                  : 'text-slate-600 hover:text-slate-900'
-              }`}
-              title="Jumbo font size (128% - Courtroom brief reading)"
-            >
-              A++
-            </button>
+            {/* Font Scaler (A / A+ / A++) */}
+            <div className="flex items-center gap-0.5 rounded-xl border border-slate-200 bg-slate-100 p-0.5 text-xs shadow-inner" title="Advocate Font Size: Normal (100%), Large (114%), Jumbo (128%)">
+              <button
+                type="button"
+                onClick={() => setFontSizeScale('normal')}
+                className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all cursor-pointer ${
+                  fontSizeScale === 'normal'
+                    ? 'bg-white text-blue-700 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Normal text size (100%)"
+              >
+                A
+              </button>
+              <button
+                type="button"
+                onClick={() => setFontSizeScale('large')}
+                className={`rounded-lg px-2 py-0.5 text-xs font-bold transition-all cursor-pointer ${
+                  fontSizeScale === 'large'
+                    ? 'bg-white text-blue-700 shadow-xs font-bold'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Large font size (114% - Recommended for Advocates 48+)"
+              >
+                A+
+              </button>
+              <button
+                type="button"
+                onClick={() => setFontSizeScale('jumbo')}
+                className={`rounded-lg px-2 py-0.5 text-xs font-black transition-all cursor-pointer ${
+                  fontSizeScale === 'jumbo'
+                    ? 'bg-white text-blue-700 shadow-xs font-black'
+                    : 'text-slate-600 hover:text-slate-900'
+                }`}
+                title="Jumbo font size (128% - Courtroom brief reading)"
+              >
+                A++
+              </button>
+            </div>
+
+            {activeDocument && (
+              <button
+                type="button"
+                onClick={() => setIsHeaderCollapsed(true)}
+                className="flex items-center gap-1.5 rounded-xl border border-blue-200 bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700 hover:bg-blue-100 transition-colors shadow-2xs cursor-pointer ml-1"
+                title="Collapse top headers to maximize PDF reading area"
+              >
+                <span>▲</span>
+                <span>Collapse Menu</span>
+              </button>
+            )}
           </div>
         </div>
-      </div>
+      )}
 
       {exportJob && (
         <div className="border-b border-slate-800 bg-slate-900 px-4 py-2 text-sm">
@@ -958,17 +1037,11 @@ export default function ProjectWorkspacePage() {
       )}
 
       {tab === 'documents' && (
-        <div className="flex flex-1 flex-col overflow-hidden p-4">
+        <div className={`flex flex-1 flex-col overflow-hidden ${activeDocument ? 'p-0' : 'p-4'}`}>
           {activeDocument ? (
-            // Opening a document replaces the grid with a compact header
-            // bar rather than stacking the viewer below it - the grid
-            // previously stayed on-screen above an already-tall PdfViewer
-            // box, so reaching the bottom mode-switch bar (Drawing/
-            // Document/Workspace) needed scrolling the whole outer page,
-            // not just the PDF itself. Making the viewer `flex-1` here
-            // guarantees it always fills the remaining viewport exactly,
-            // so that bar is never pushed below the fold.
-            <div className="mb-3 flex shrink-0 items-center justify-between gap-3 flex-wrap">
+            <>
+              {!isHeaderCollapsed && (
+                <div className="mb-2 flex shrink-0 items-center justify-between gap-3 flex-wrap px-3 pt-2">
               <div className="flex min-w-0 items-center gap-3">
                 <Button
                   variant="secondary"
@@ -1167,7 +1240,9 @@ export default function ProjectWorkspacePage() {
                 </div>
               </div>
             </div>
-          ) : (
+          )}
+        </>
+      ) : (
             <div
               className={`relative overflow-auto pb-12 transition-all duration-200 ${
                 isDraggingOver ? 'bg-blue-50/50 ring-4 ring-blue-500 ring-dashed rounded-3xl' : ''
@@ -1585,7 +1660,7 @@ export default function ProjectWorkspacePage() {
           {activeDocument && (
             <div
               ref={splitContainerRef}
-              className="relative flex flex-1 overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+              className={`relative flex flex-1 overflow-hidden bg-slate-950 ${isHeaderCollapsed ? 'rounded-none border-0' : 'rounded-lg border border-slate-800'}`}
             >
               {/* Dynamic Elastic Spring-Line Tether between PDF and Canvas */}
               {layoutMode === 'split' && tetherCoords && (
@@ -1650,6 +1725,7 @@ export default function ProjectWorkspacePage() {
                           onSaveExcerpt={(s) => handleSaveExcerptFor(activeDocument.id, s)}
                           initialPage={focusPage}
                           onSwitchToWorkspace={() => setLayoutMode('split')}
+                          focusExcerpt={activeExcerpt}
                         />
                       </div>
                     </div>
@@ -1683,23 +1759,223 @@ export default function ProjectWorkspacePage() {
                   </div>
                 ) : (
                   <div className="flex flex-1 flex-col overflow-hidden">
-                    <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900/90 px-3 py-1.5 text-xs font-medium text-slate-300">
-                      <span className="truncate max-w-md font-semibold text-slate-200">
-                        📄 {activeDocument.original_filename}
-                      </span>
+                    <div className="flex items-center justify-between border-b border-slate-800 bg-slate-900 px-3 py-1.5 text-xs font-medium text-slate-300 shrink-0">
+                      <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto no-scrollbar py-0.5">
+                        {documents && documents.length > 1 ? (
+                          documents.map((doc) => {
+                            const isActive = activeDocument?.id === doc.id
+                            return (
+                              <button
+                                key={doc.id}
+                                type="button"
+                                onClick={() => {
+                                  setActiveDocument(doc)
+                                  setFocusPage(undefined)
+                                }}
+                                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all cursor-pointer whitespace-nowrap shrink-0 shadow-2xs ${
+                                  isActive
+                                    ? 'bg-blue-600 text-white shadow-xs'
+                                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700 hover:text-white border border-slate-700/80'
+                                }`}
+                                title={doc.original_filename}
+                              >
+                                <span>📄</span>
+                                <span className="max-w-[140px] truncate">{doc.original_filename}</span>
+                              </button>
+                            )
+                          })
+                        ) : (
+                          <span className="truncate max-w-xs md:max-w-md font-semibold text-slate-100" title={activeDocument.original_filename}>
+                            📄 {activeDocument.original_filename}
+                          </span>
+                        )}
+
+                        {/* LiquidText Parallel Compare Button (Lesson 10) */}
+                        {documents && documents.length > 1 && !secondaryDocument && (
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() => setShowCompareMenu((v) => !v)}
+                              className="flex items-center gap-1 rounded-lg border border-amber-500/40 bg-amber-500/10 hover:bg-amber-500/20 px-2 py-1 text-xs font-bold text-amber-300 transition-colors cursor-pointer shrink-0"
+                              title="Compare another document side-by-side in reader (Lesson 10)"
+                            >
+                              <span>⫴ Parallel</span>
+                            </button>
+                            {showCompareMenu && (
+                              <div className="absolute left-0 top-full mt-1.5 w-60 rounded-xl border border-slate-700 bg-slate-900 p-2 shadow-2xl z-50 text-slate-200">
+                                <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5 px-1">Select Parallel Document</div>
+                                <div className="flex flex-col gap-1 max-h-48 overflow-y-auto">
+                                  {documents
+                                    .filter((d) => d.id !== activeDocument.id)
+                                    .map((d) => (
+                                      <button
+                                        key={d.id}
+                                        type="button"
+                                        onClick={() => {
+                                          setSecondaryDocument(d)
+                                          setShowCompareMenu(false)
+                                        }}
+                                        className="text-left rounded-lg p-1.5 text-xs text-slate-300 hover:bg-slate-800 hover:text-white truncate cursor-pointer"
+                                      >
+                                        📄 {d.original_filename}
+                                      </button>
+                                    ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+
+                        {/* LiquidText Defined Terms Glossary Button (Lesson 17 & Corporate Law Demo) */}
+                        <button
+                          type="button"
+                          onClick={() => setShowGlossaryModal(true)}
+                          className="flex items-center gap-1 rounded-lg border border-indigo-500/40 bg-indigo-500/10 hover:bg-indigo-500/20 px-2 py-1 text-xs font-bold text-indigo-300 transition-colors cursor-pointer shrink-0"
+                          title="Open Defined Terms & Legal Glossary (Lesson 17)"
+                        >
+                          <span>📖 Glossary</span>
+                        </button>
+                      </div>
+
                       <div className="flex items-center gap-2">
+                        {/* Sub-menu Dropdown for all Actions & Tools */}
+                        <div className="relative" ref={actionsDropdownRef}>
+                          <button
+                            type="button"
+                            onClick={() => setShowActionsDropdown((v) => !v)}
+                            className="flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800 hover:bg-slate-700 px-2.5 py-1 text-xs font-bold text-slate-200 transition-colors cursor-pointer shadow-2xs"
+                            title="Open Tools & Matter Actions Sub-Menu"
+                          >
+                            <span>⚡</span>
+                            <span>Actions & Tools</span>
+                            <span className="text-[9px] text-slate-400">▾</span>
+                          </button>
+
+                          {showActionsDropdown && (
+                            <div className="absolute right-0 top-full mt-1.5 w-72 rounded-2xl border border-slate-700 bg-slate-900 p-2.5 shadow-2xl backdrop-blur-xl z-50 text-slate-200 flex flex-col gap-2">
+                              <div className="flex items-center justify-between border-b border-slate-800 pb-1.5 px-1 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                                <span>Advocate Suite Tools</span>
+                                <span className="text-[10px] text-cyan-400">Quick Access</span>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowActionsDropdown(false)
+                                    setHearingMode(true)
+                                  }}
+                                  className="flex items-center gap-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 p-2 text-left text-xs font-semibold text-slate-200 transition-colors"
+                                >
+                                  <span>⚖️</span>
+                                  <span>Hearing Dais</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowActionsDropdown(false)
+                                    setShowChronologyModal(true)
+                                  }}
+                                  className="flex items-center gap-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 p-2 text-left text-xs font-semibold text-slate-200 transition-colors"
+                                >
+                                  <span>📅</span>
+                                  <span>Case Dates</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowActionsDropdown(false)
+                                    handleToggleVault()
+                                  }}
+                                  className="flex items-center gap-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 p-2 text-left text-xs font-semibold text-slate-200 transition-colors"
+                                >
+                                  <span>💾</span>
+                                  <span>{vaultCachedAt ? 'Vault Ready' : 'Cache Offline'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowActionsDropdown(false)
+                                    setShowChambersModal(true)
+                                  }}
+                                  className="flex items-center gap-2 rounded-xl bg-slate-800/80 hover:bg-slate-700 p-2 text-left text-xs font-semibold text-slate-200 transition-colors"
+                                >
+                                  <span>👥</span>
+                                  <span>Chambers</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setShowActionsDropdown(false)
+                                    setShowShredModal(true)
+                                  }}
+                                  className="col-span-2 flex items-center gap-2 rounded-xl bg-rose-950/40 border border-rose-800/50 hover:bg-rose-900/60 p-2 text-left text-xs font-semibold text-rose-300 transition-colors"
+                                >
+                                  <span>🔒</span>
+                                  <span>Zero-Retention Shred</span>
+                                </button>
+                              </div>
+
+                              {/* Export section inside sub-menu */}
+                              <div className="border-t border-slate-800 pt-2 flex flex-col gap-1.5">
+                                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-1">Export Matter</span>
+                                <div className="flex items-center gap-1.5">
+                                  <select
+                                    value={exportFormat}
+                                    onChange={(e) => setExportFormat(e.target.value as 'pdf' | 'pdf_highlights' | 'docx')}
+                                    className="flex-1 rounded-xl border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-200 focus:outline-none"
+                                  >
+                                    <option value="pdf">Notes/Excerpts (PDF)</option>
+                                    <option value="pdf_highlights">Highlighted PDF</option>
+                                    <option value="docx">Notes/Excerpts (DOCX)</option>
+                                  </select>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setShowActionsDropdown(false)
+                                      handleStartExport()
+                                    }}
+                                    disabled={startExport.isPending}
+                                    className="rounded-xl bg-blue-600 hover:bg-blue-500 px-3 py-1 text-xs font-bold text-white transition-colors"
+                                  >
+                                    Export
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Collapse / Expand Toggle Button */}
+                        <button
+                          type="button"
+                          onClick={() => setIsHeaderCollapsed((c) => !c)}
+                          className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1 text-xs font-bold transition-all cursor-pointer shadow-2xs ${
+                            isHeaderCollapsed
+                              ? 'bg-blue-600 text-white hover:bg-blue-500 ring-2 ring-blue-400/30'
+                              : 'bg-slate-800 text-slate-300 hover:bg-slate-700 border border-slate-700'
+                          }`}
+                          title={isHeaderCollapsed ? 'Expand top menu (Show full headers)' : 'Collapse top menu (Maximize reading screen)'}
+                        >
+                          <span>{isHeaderCollapsed ? '▼' : '▲'}</span>
+                          <span className="hidden sm:inline">{isHeaderCollapsed ? 'Expand Menu' : 'Collapse Menu'}</span>
+                        </button>
+
                         <button
                           type="button"
                           onClick={() => handleDeleteDocument(activeDocument.id, activeDocument.original_filename)}
-                          className="flex items-center gap-1 rounded bg-rose-950/40 border border-rose-700/50 px-2 py-0.5 text-xs font-semibold text-rose-300 hover:bg-rose-900/60 transition-colors cursor-pointer"
+                          className="flex items-center gap-1 rounded-lg bg-rose-950/40 border border-rose-700/50 px-2 py-1 text-xs font-semibold text-rose-300 hover:bg-rose-900/60 transition-colors cursor-pointer"
                           title="Delete this PDF brief"
                         >
-                          🗑️ Delete PDF
+                          🗑️
                         </button>
                         <button
                           type="button"
-                          onClick={() => setActiveDocument(null)}
-                          className="rounded bg-slate-800 px-2.5 py-0.5 text-xs font-semibold text-slate-300 hover:bg-slate-700 transition-colors cursor-pointer"
+                          onClick={() => {
+                            setIsHeaderCollapsed(false)
+                            setActiveDocument(null)
+                          }}
+                          className="rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 px-2.5 py-1 text-xs font-semibold text-slate-300 hover:text-white transition-colors cursor-pointer"
                           title="Close reader and return to documents"
                         >
                           ✕ Close Reader
@@ -1712,6 +1988,7 @@ export default function ProjectWorkspacePage() {
                         onSaveExcerpt={handleSaveExcerpt}
                         initialPage={focusPage}
                         onSwitchToWorkspace={() => setLayoutMode('split')}
+                        focusExcerpt={activeExcerpt}
                       />
                     </div>
                   </div>
@@ -1738,26 +2015,35 @@ export default function ProjectWorkspacePage() {
                   display: layoutMode === 'doc' ? 'none' : 'flex',
                 }}
               >
-                <div className="flex flex-1 overflow-hidden">
-                  <div className="flex-1 overflow-hidden">
-                    <WorkspaceCanvas
-                      projectId={projectId!}
-                      items={workspaceItems ?? []}
-                      excerpts={excerpts ?? []}
-                      notes={notes ?? []}
-                      links={links ?? []}
-                      tags={tags ?? []}
-                      documents={documents ?? []}
-                      onOpenCard={handleOpenCard}
-                      onNavigateToSource={handleNavigateToSource}
-                      activeCardId={activeCardId}
-                      onCardHover={(cardId) => {
-                        if (cardId) setActiveCardId(cardId)
-                      }}
-                      onCardSelect={(cardId) => setActiveCardId(cardId)}
-                      onDropExcerpt={handleDropExcerpt}
-                    />
-                  </div>
+                <div className="flex flex-1 flex-col overflow-hidden">
+                  <WorkspaceBoardTabs
+                    projectId={projectId!}
+                    workspaces={workspaces}
+                    activeWorkspaceId={activeWorkspaceId}
+                    onSelectWorkspace={setSelectedWorkspaceId}
+                    totalCardsOnCanvas={workspaceItems?.length}
+                  />
+                  <div className="flex flex-1 overflow-hidden relative">
+                    <div className="flex-1 overflow-hidden">
+                      <WorkspaceCanvas
+                        projectId={projectId!}
+                        workspaceId={activeWorkspaceId}
+                        items={workspaceItems ?? []}
+                        excerpts={excerpts ?? []}
+                        notes={notes ?? []}
+                        links={links ?? []}
+                        tags={tags ?? []}
+                        documents={documents ?? []}
+                        onOpenCard={handleOpenCard}
+                        onNavigateToSource={handleNavigateToSource}
+                        activeCardId={activeCardId}
+                        onCardHover={(cardId) => {
+                          if (cardId) setActiveCardId(cardId)
+                        }}
+                        onCardSelect={(cardId) => setActiveCardId(cardId)}
+                        onDropExcerpt={handleDropExcerpt}
+                      />
+                    </div>
 
                   {showCanvasSidebar ? (
                     <aside className="w-64 shrink-0 overflow-y-auto border-l border-slate-200/90 bg-white p-3.5 shadow-xs">
@@ -1810,27 +2096,37 @@ export default function ProjectWorkspacePage() {
                 </div>
               </div>
             </div>
+          </div>
           )}
         </div>
       )}
 
       {tab === 'workspace' && (
-        <div className="flex flex-1 overflow-hidden">
-          <div className="flex-1">
-            <WorkspaceCanvas
-              projectId={projectId!}
-              items={workspaceItems ?? []}
-              excerpts={excerpts ?? []}
-              notes={notes ?? []}
-              links={links ?? []}
-              tags={tags ?? []}
-              documents={documents ?? []}
-              onOpenCard={handleOpenCard}
-              onNavigateToSource={handleNavigateToSource}
-              activeCardId={activeCardId}
-              onDropExcerpt={handleDropExcerpt}
-            />
-          </div>
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <WorkspaceBoardTabs
+            projectId={projectId!}
+            workspaces={workspaces}
+            activeWorkspaceId={activeWorkspaceId}
+            onSelectWorkspace={setSelectedWorkspaceId}
+            totalCardsOnCanvas={workspaceItems?.length}
+          />
+          <div className="flex flex-1 overflow-hidden">
+            <div className="flex-1">
+              <WorkspaceCanvas
+                projectId={projectId!}
+                workspaceId={activeWorkspaceId}
+                items={workspaceItems ?? []}
+                excerpts={excerpts ?? []}
+                notes={notes ?? []}
+                links={links ?? []}
+                tags={tags ?? []}
+                documents={documents ?? []}
+                onOpenCard={handleOpenCard}
+                onNavigateToSource={handleNavigateToSource}
+                activeCardId={activeCardId}
+                onDropExcerpt={handleDropExcerpt}
+              />
+            </div>
           <aside className="w-72 shrink-0 border-l border-slate-200/90 bg-white p-4 shadow-xs text-slate-800">
             <h2 className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-800">New note</h2>
             <form onSubmit={handleCreateNote} className="mb-6 space-y-2">
@@ -1924,6 +2220,7 @@ export default function ProjectWorkspacePage() {
             )}
           </aside>
         </div>
+      </div>
       )}
 
       {tab === 'search' && (
@@ -2240,6 +2537,15 @@ export default function ProjectWorkspacePage() {
         documents={documents ?? []}
         excerpts={excerpts ?? []}
         onNavigateToPage={handleNavigateToPage}
+      />
+
+      {/* Defined Terms & Legal Glossary Modal (Lesson 17) */}
+      <DefinedTermsGlossaryModal
+        isOpen={showGlossaryModal}
+        onClose={() => setShowGlossaryModal(false)}
+        projectId={projectId!}
+        activeDocumentId={activeDocument?.id}
+        onNavigateToPage={(p) => setFocusPage(p)}
       />
 
       {/* Chambers Team Manager Modal */}
